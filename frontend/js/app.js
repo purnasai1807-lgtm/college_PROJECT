@@ -570,7 +570,7 @@ function orderRow(order, showCustomer = false, workflowStage = "all") {
     orderApi(`/api/orders/${order.id}/review`).then(existing => { if (existing.review) { rating.value = String(existing.review.rating); comment.value = existing.review.comment || ''; submit.textContent = 'Update feedback'; status.textContent = 'Thanks for sharing your feedback.'; } }).catch(() => {});
     form.addEventListener('submit', async event => { event.preventDefault(); submit.disabled = true; status.textContent = 'Saving feedback…'; try { const saved = await orderApi(`/api/orders/${order.id}/review`, { method: 'POST', body: JSON.stringify({ rating: Number(rating.value), comment: comment.value }) }); status.textContent = saved.message || 'Feedback saved. Thank you!'; submit.textContent = 'Update feedback'; } catch (error) { status.textContent = error.message; } finally { submit.disabled = false; } });
   }
-  if (showCustomer) {
+  if (showCustomer && order.payment_status === 'paid') {
     const next = { pending: ['confirmed'], confirmed: ['preparing'], preparing: ['ready'], ready: ['completed'], completed: [], cancelled: [] }[order.status] || [];
     const allowedNext = workflowStage === 'kitchen' ? next.filter(status => ['confirmed', 'preparing', 'ready'].includes(status)) : workflowStage === 'counter' ? next.filter(status => status === 'completed') : next;
     for (const status of allowedNext) { const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button'; button.textContent = status[0].toUpperCase() + status.slice(1); button.addEventListener('click', async () => { button.disabled = true; try { await orderApi(`/api/admin/orders/${order.id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); await loadOrderQueue(); if (typeof loadStaffWorkflow === 'function') await loadStaffWorkflow(); } catch (error) { alert(error.message); } finally { button.disabled = false; } }); row.append(button); }
@@ -586,7 +586,25 @@ async function loadOrderQueue() {
   const list = document.querySelector('#order-queue-list'), message = document.querySelector('#order-queue-message'); if (!list || !message || !['admin', 'staff'].includes(window.aceCanteenUser?.role)) return;
   list.replaceChildren(); message.textContent = 'Loading incoming orders…';
   const filter = document.querySelector('#queue-status-filter')?.value;
-  try { const orders = await orderApi(`/api/admin/orders${filter ? `?status=${encodeURIComponent(filter)}` : ''}`); if (!orders.length) message.textContent = 'No orders in this queue filter.'; else { message.textContent = `${orders.length} order(s) · queue is sorted oldest first.`; orders.forEach(order => list.append(orderRow(order, true))); } } catch (error) { message.textContent = error.message; }
+  const paymentFilter = document.querySelector('#queue-payment-filter')?.value;
+  const isAdmin = window.aceCanteenUser?.role === 'admin';
+  try {
+    let orders;
+    if (isAdmin) {
+      const params = new URLSearchParams({ limit: '500' });
+      if (filter) params.set('status', filter);
+      if (paymentFilter) params.set('payment_status', paymentFilter);
+      const result = await orderApi(`/api/admin/orders/all?${params.toString()}`);
+      orders = result.items || [];
+      message.textContent = `${orders.length} order(s) shown · newest first · admin register includes pending/failed payments.`;
+    } else {
+      const result = await orderApi(`/api/admin/orders${filter ? `?status=${encodeURIComponent(filter)}` : ''}`);
+      orders = result;
+      message.textContent = `${orders.length} paid order(s) · queue is sorted oldest first.`;
+    }
+    if (!orders.length) message.textContent = 'No orders match these filters.';
+    else orders.forEach(order => list.append(orderRow(order, true)));
+  } catch (error) { message.textContent = error.message; }
 }
 // Phase 10: dedicated kitchen and pickup-counter work queues.
 async function loadStaffWorkflow() {
@@ -622,6 +640,7 @@ loadPublicQueue();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loadPublicQueue(); });
 document.querySelector('#refresh-order-queue')?.addEventListener('click', loadOrderQueue);
 document.querySelector('#queue-status-filter')?.addEventListener('change', loadOrderQueue);
+document.querySelector('#queue-payment-filter')?.addEventListener('change', loadOrderQueue);
 function syncHeaderAccount(user = window.aceCanteenUser) {
   const link = document.querySelector('#header-account-link'); const label = document.querySelector('#header-account-user');
   if (!link || !label) return;
@@ -861,4 +880,107 @@ window.setInterval(() => {
   document.addEventListener('visibilitychange', () => { if (!document.hidden && window.aceCanteenUser) loadNotifications(); });
   window.setInterval(() => { if (!document.hidden && window.aceCanteenUser) loadNotifications(); }, 20000);
   if (window.aceCanteenUser) loadNotifications();
+})();
+
+
+// Phase 45: visual admin control centre backed by the admin-only register APIs.
+(() => {
+  const $ = id => document.getElementById(id);
+  const panel = $('admin-control-centre');
+  if (!panel) return;
+  let page = 0, debounce = null;
+  const pageSize = 50;
+  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function request(path, options = {}) {
+    if (!window.aceCanteenToken) throw new Error('Please sign in with an administrator account.');
+    const response = await fetch(path, {...options, headers: {...(options.headers || {}), Authorization: `Bearer ${window.aceCanteenToken}`}});
+    const type = response.headers.get('content-type') || '';
+    if (!response.ok) {
+      let detail = `Request failed (${response.status})`;
+      try { const data = type.includes('json') ? await response.json() : null; detail = data?.detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    return type.includes('json') ? response.json() : response;
+  }
+  function message(id, text, bad = false) { const el = $(id); if (el) { el.textContent = text; el.classList.toggle('error', bad); } }
+  function adminVisible() {
+    const allowed = window.aceCanteenUser?.role === 'admin' && !!window.aceCanteenToken;
+    panel.hidden = !allowed;
+    if (allowed) { loadSummary(); loadOrders(); loadWebhooks(); }
+  }
+  async function loadSummary() {
+    try {
+      const d = await request('/api/admin/dashboard/summary');
+      const cards = [
+        ['All orders', d.orders_total], ['Paid orders', d.orders_paid], ['Open orders', d.orders_open],
+        ['Pending payments', d.payments_pending], ['Failed payments', d.payments_failed],
+        ['Paid revenue', `₹${Number(d.paid_revenue || 0).toLocaleString('en-IN',{maximumFractionDigits:2})}`],
+        ['Low-stock products', d.low_stock_products], ['Active users', d.active_users]
+      ];
+      $('admin-kpi-grid').replaceChildren(...cards.map(([label,value]) => {
+        const card = document.createElement('div'); card.className = 'admin-kpi-card';
+        const strong = document.createElement('strong'); strong.textContent = value ?? 0;
+        const span = document.createElement('span'); span.textContent = label;
+        card.append(strong, span); return card;
+      }));
+    } catch (e) { message('admin-orders-message', `Dashboard: ${e.message}`, true); }
+  }
+  async function loadOrders() {
+    if (window.aceCanteenUser?.role !== 'admin') return;
+    const body = $('admin-orders-body'); body.replaceChildren();
+    message('admin-orders-message', 'Loading order register…');
+    const query = new URLSearchParams({limit:String(pageSize),offset:String(page*pageSize)});
+    const search = $('admin-order-search').value.trim(), status = $('admin-order-status').value, payment = $('admin-payment-status').value;
+    if (search) query.set('search', search); if (status) query.set('status', status); if (payment) query.set('payment_status', payment);
+    try {
+      const data = await request(`/api/admin/orders/all?${query}`);
+      for (const order of data.items || []) {
+        const tr = document.createElement('tr');
+        const values = [
+          `#${order.id}`, `${order.customer_name || ''}\n${order.customer_email || ''}`,
+          order.created_at ? new Date(order.created_at).toLocaleString() : '—',
+          order.status, order.payment_status, `₹${Number(order.subtotal || 0).toFixed(2)}`, order.token_number || '—'
+        ];
+        for (const value of values) { const td = document.createElement('td'); td.textContent = value; tr.append(td); }
+        body.append(tr);
+      }
+      message('admin-orders-message', `${data.returned} order(s) shown. All payment states are included unless filtered.`);
+      $('admin-orders-page').textContent = `Page ${page+1} · ${data.returned} rows`;
+      $('admin-orders-prev').disabled = page === 0;
+      $('admin-orders-next').disabled = data.returned < pageSize;
+    } catch (e) { message('admin-orders-message', e.message, true); }
+  }
+  async function loadWebhooks() {
+    try {
+      const data = await request('/api/admin/payments/webhook-events?limit=100&offset=0');
+      const body = $('admin-webhooks-body'); body.replaceChildren();
+      for (const event of data.items || []) {
+        const tr = document.createElement('tr');
+        for (const value of [event.event_id, event.event_name, event.received_at ? new Date(event.received_at).toLocaleString() : '—']) {
+          const td = document.createElement('td'); td.textContent = value || '—'; tr.append(td);
+        }
+        body.append(tr);
+      }
+      message('admin-webhook-message', `${data.returned} recent webhook event(s).`);
+    } catch (e) { message('admin-webhook-message', e.message, true); }
+  }
+  $('admin-refresh-orders').addEventListener('click', () => { page=0; loadSummary(); loadOrders(); });
+  ['admin-order-status','admin-payment-status'].forEach(id => $(id).addEventListener('change', () => { page=0; loadOrders(); }));
+  $('admin-order-search').addEventListener('input', () => { clearTimeout(debounce); debounce=setTimeout(() => { page=0; loadOrders(); }, 300); });
+  $('admin-orders-prev').addEventListener('click', () => { if (page > 0) { page--; loadOrders(); } });
+  $('admin-orders-next').addEventListener('click', () => { page++; loadOrders(); });
+  $('admin-refresh-webhooks').addEventListener('click', loadWebhooks);
+  $('admin-export-orders').addEventListener('click', async () => {
+    try {
+      const query = new URLSearchParams();
+      if ($('admin-order-status').value) query.set('status',$('admin-order-status').value);
+      if ($('admin-payment-status').value) query.set('payment_status',$('admin-payment-status').value);
+      const response = await request(`/api/admin/orders/export.csv?${query}`);
+      const blob = await response.blob(), url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href=url; a.download='ace-canteen-orders.csv'; a.click(); URL.revokeObjectURL(url);
+      message('admin-orders-message','CSV export downloaded.');
+    } catch(e) { message('admin-orders-message',e.message,true); }
+  });
+  document.addEventListener('ace-auth-changed', adminVisible);
+  adminVisible();
 })();

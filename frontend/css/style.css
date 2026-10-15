@@ -200,3 +200,20 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 .feedback-form select, .feedback-form input { min-height: 42px; padding: .55rem .7rem; border: 1px solid var(--border, #d9e1e8); border-radius: 8px; max-width: 100%; }
 .feedback-form input { flex: 1 1 220px; }
 .feedback-form small { flex-basis: 100%; }
+
+/* Phase 45: responsive admin control centre */
+.admin-control-centre { margin: 1.25rem 0; padding: clamp(1rem, 3vw, 2rem); border: 1px solid var(--border, #dbe4ef); border-radius: 1rem; background: var(--surface, #fff); }
+.admin-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.75rem; margin:1rem 0 1.25rem; }
+.admin-kpi-card { display:flex; flex-direction:column; gap:.35rem; padding:1rem; border:1px solid var(--border,#dbe4ef); border-radius:.8rem; background:var(--surface-muted,#f6f9fc); }
+.admin-kpi-card strong { font-size:1.45rem; overflow-wrap:anywhere; }
+.admin-kpi-card span { font-size:.85rem; color:var(--muted,#526174); }
+.admin-order-toolbar { display:grid; grid-template-columns: minmax(220px,2fr) repeat(2,minmax(140px,1fr)) auto auto; align-items:end; gap:.75rem; margin:1rem 0; }
+.admin-order-toolbar label { display:grid; gap:.35rem; font-size:.85rem; }
+.admin-order-toolbar input,.admin-order-toolbar select { min-width:0; width:100%; }
+.table-scroll { max-width:100%; overflow:auto; border:1px solid var(--border,#dbe4ef); border-radius:.7rem; }
+.admin-orders-table { min-width:850px; width:100%; border-collapse:collapse; }
+.admin-control-centre th,.admin-control-centre td { padding:.7rem .8rem; text-align:left; border-bottom:1px solid var(--border,#e3eaf2); vertical-align:top; white-space:pre-line; }
+.admin-control-centre th { font-size:.82rem; background:var(--surface-muted,#f6f9fc); }
+.admin-pagination { display:flex; justify-content:center; align-items:center; gap:1rem; padding:1rem 0; }
+.admin-webhook-heading { margin-top:2rem; }
+@media(max-width:760px) { .admin-order-toolbar { grid-template-columns:1fr; } .admin-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }

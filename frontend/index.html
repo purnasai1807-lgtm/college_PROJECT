@@ -93,7 +93,7 @@
           <div class="management-card management-list"><div class="management-list-head"><h3>Pickup counter</h3><button class="secondary-button" id="refresh-counter-board" type="button">Refresh</button></div><p class="management-message" id="counter-board-message" role="status">Waiting for ready orders…</p><div id="counter-board-list"></div></div>
         </div>
       </div>
-      <div class="management-card management-list" id="order-queue-panel"><div class="management-list-head"><h3>Incoming orders & live queue</h3><div><button class="secondary-button" id="refresh-order-queue" type="button">Refresh queue</button><select id="queue-status-filter" aria-label="Filter queue"><option value="">All statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="preparing">Preparing</option><option value="ready">Ready</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></div></div><p class="management-message" id="order-queue-message" role="status">Incoming student orders will appear here.</p><div id="order-queue-list"></div></div>
+      <div class="management-card management-list" id="order-queue-panel"><div class="management-list-head"><h3>Incoming orders & live queue</h3><div><button class="secondary-button" id="refresh-order-queue" type="button">Refresh queue</button><select id="queue-status-filter" aria-label="Filter queue"><option value="">All statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="preparing">Preparing</option><option value="ready">Ready</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select><select id="queue-payment-filter" aria-label="Filter payment status"><option value="">All payments</option><option value="pending">Payment pending</option><option value="paid">Paid</option><option value="failed">Payment failed</option><option value="refunded">Refund status</option></select></div></div><p class="management-message" id="order-queue-message" role="status">Admin register includes all orders and payment exceptions; staff see paid operational orders.</p><div id="order-queue-list"></div></div>
       <div class="management-grid">
         <form class="management-card" id="product-form">
           <h3>Add a product</h3>
@@ -148,6 +148,25 @@
       </section>
     </section>
 
+
+      <section class="admin-control-centre" id="admin-control-centre" hidden aria-labelledby="admin-control-heading">
+        <div class="section-heading"><p class="eyebrow">PHASE 45 · ADMIN CONTROL CENTRE</p><h2 id="admin-control-heading">All orders, payments & operations</h2><p>Review every order, investigate payment states, export records, and inspect payment webhook events.</p></div>
+        <div class="admin-kpi-grid" id="admin-kpi-grid" aria-live="polite"></div>
+        <div class="admin-order-toolbar">
+          <label>Search orders<input id="admin-order-search" type="search" maxlength="120" placeholder="Order ID, customer, email or gateway ID"></label>
+          <label>Order status<select id="admin-order-status"><option value="">All statuses</option><option>pending</option><option>confirmed</option><option>preparing</option><option>ready</option><option>completed</option><option>cancelled</option></select></label>
+          <label>Payment status<select id="admin-payment-status"><option value="">All payments</option><option>pending</option><option>paid</option><option>failed</option><option>refunded</option></select></label>
+          <button type="button" id="admin-refresh-orders">Refresh orders</button>
+          <button type="button" class="secondary-button" id="admin-export-orders">Export CSV</button>
+        </div>
+        <p id="admin-orders-message" role="status" aria-live="polite"></p>
+        <div class="table-scroll"><table class="admin-orders-table"><thead><tr><th>Order</th><th>Customer</th><th>Created</th><th>Order status</th><th>Payment</th><th>Amount</th><th>Pickup</th></tr></thead><tbody id="admin-orders-body"></tbody></table></div>
+        <div class="admin-pagination"><button type="button" class="secondary-button" id="admin-orders-prev">Previous</button><span id="admin-orders-page">Page 1</span><button type="button" class="secondary-button" id="admin-orders-next">Next</button></div>
+        <div class="section-heading admin-webhook-heading"><h3>Payment webhook event ledger</h3><p>Event metadata for payment troubleshooting; sensitive signatures are not displayed.</p></div>
+        <button type="button" class="secondary-button" id="admin-refresh-webhooks">Refresh webhook events</button>
+        <p id="admin-webhook-message" role="status"></p>
+        <div class="table-scroll"><table><thead><tr><th>Event ID</th><th>Event</th><th>Received</th></tr></thead><tbody id="admin-webhooks-body"></tbody></table></div>
+      </section>
     <section class="auth-section" id="account">
       <div class="section-heading"><p class="eyebrow">PHASE 3 · STUDENT ACCOUNTS</p><h2>Your campus account.</h2><p>Create a student account or sign in. Staff and admin roles are assigned securely by an administrator.</p></div>
       <div class="auth-card">

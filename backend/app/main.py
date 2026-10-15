@@ -1,5 +1,7 @@
 """ACE Canteen API: Phase 1 foundation + Phase 2 persistence."""
 from contextlib import asynccontextmanager
+import csv
+import io
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import logging
@@ -16,9 +18,9 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text, func, or_, cast, String
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
@@ -81,12 +83,31 @@ def _login_rate_key(request: Request, email: str) -> str:
     client_ip = request.client.host if request.client else "unknown"
     return f"{client_ip}:{email.strip().lower()}"
 
+def _prune_login_attempts(now: float) -> None:
+    """Remove expired keys so arbitrary login identifiers cannot grow memory forever."""
+    expired = []
+    for key, attempts in _login_attempts.items():
+        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
+            attempts.popleft()
+        if not attempts:
+            expired.append(key)
+    for key in expired:
+        _login_attempts.pop(key, None)
+
 def _check_login_rate(key: str) -> int:
     now = time.monotonic()
     with _login_attempts_lock:
-        attempts = _login_attempts[key]
+        # Prune periodically, not on every request, to keep normal login checks cheap.
+        if len(_login_attempts) > 1024:
+            _prune_login_attempts(now)
+        attempts = _login_attempts.get(key)
+        if attempts is None:
+            return 0
         while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
             attempts.popleft()
+        if not attempts:
+            _login_attempts.pop(key, None)
+            return 0
         if len(attempts) >= _LOGIN_LIMIT:
             return max(1, int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])))
     return 0
@@ -94,6 +115,8 @@ def _check_login_rate(key: str) -> int:
 def _record_failed_login(key: str) -> None:
     now = time.monotonic()
     with _login_attempts_lock:
+        if len(_login_attempts) > 1024:
+            _prune_login_attempts(now)
         attempts = _login_attempts[key]
         while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
             attempts.popleft()
@@ -1059,6 +1082,84 @@ def order_queue(status: str | None = Query(default=None, pattern="^(pending|conf
         data["customer_email"] = order.user.email
         result.append(data)
     return result
+
+@app.get("/api/admin/orders/all", tags=["admin order verification"], summary="Admin-only complete order register")
+def admin_all_orders(
+    status: str | None = Query(default=None, pattern="^(pending|confirmed|preparing|ready|completed|cancelled)$"),
+    payment_status: str | None = Query(default=None, pattern="^(pending|paid|failed|refunded)$"),
+    search: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    """Return paid, unpaid, failed and completed orders for administrator review.
+
+    Staff keep using the operational paid-order queue; this register is admin-only
+    so payment exceptions and customer details are not exposed to ordinary staff.
+    """
+    stmt = select(Order).options(joinedload(Order.items), joinedload(Order.user)).order_by(Order.created_at.desc()).offset(offset).limit(limit)
+    if status:
+        stmt = stmt.where(Order.status == OrderStatus(status))
+    if payment_status:
+        stmt = stmt.where(Order.payment_status == PaymentStatus(payment_status))
+    if search:
+        term = f"%{search.strip()}%"
+        stmt = stmt.join(Order.user).where(or_(Order.user.has(User.full_name.ilike(term)), Order.user.has(User.email.ilike(term)), cast(Order.id, String).ilike(term), Order.gateway_order_id.ilike(term)))
+    orders = db.scalars(stmt).unique().all()
+    result = []
+    for order in orders:
+        data = _order_payload(order)
+        data["customer_name"] = order.user.full_name
+        data["customer_email"] = order.user.email
+        result.append(data)
+    return {"items": result, "limit": limit, "offset": offset, "returned": len(result)}
+
+@app.get("/api/admin/dashboard/summary", tags=["administration"], summary="Cross-module admin overview")
+def admin_dashboard_summary(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    """Aggregate operational KPIs for administrators without exposing individual records."""
+    total_orders = db.scalar(select(func.count(Order.id))) or 0
+    paid_orders = db.scalar(select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.PAID)) or 0
+    pending_payments = db.scalar(select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.PENDING)) or 0
+    failed_payments = db.scalar(select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.FAILED)) or 0
+    open_orders = db.scalar(select(func.count(Order.id)).where(Order.status.in_([OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY]))) or 0
+    paid_revenue = db.scalar(select(func.coalesce(func.sum(Order.subtotal), 0)).where(Order.payment_status == PaymentStatus.PAID)) or Decimal("0.00")
+    low_stock = db.scalar(select(func.count(Product.id)).where(Product.is_archived.is_(False), Product.stock_quantity <= Product.low_stock_threshold)) or 0
+    active_users = db.scalar(select(func.count(User.id)).where(User.is_active.is_(True))) or 0
+    webhook_events = db.scalar(select(func.count(PaymentWebhookEvent.id))) or 0
+    return {"orders_total": total_orders, "orders_paid": paid_orders, "orders_open": open_orders,
+            "payments_pending": pending_payments, "payments_failed": failed_payments,
+            "paid_revenue": str(paid_revenue), "low_stock_products": low_stock,
+            "active_users": active_users, "webhook_events_received": webhook_events}
+
+@app.get("/api/admin/orders/export.csv", tags=["admin order verification"], summary="Export order register as CSV")
+def admin_export_orders_csv(
+    status: str | None = Query(default=None, pattern="^(pending|confirmed|preparing|ready|completed|cancelled)$"),
+    payment_status: str | None = Query(default=None, pattern="^(pending|paid|failed|refunded)$"),
+    _: User = Depends(require_roles("admin")), db: Session = Depends(get_db),
+):
+    """Download a bounded CSV of orders for reconciliation; no payment secrets are exported."""
+    stmt = select(Order).options(joinedload(Order.user)).order_by(Order.created_at.desc()).limit(10000)
+    if status:
+        stmt = stmt.where(Order.status == OrderStatus(status))
+    if payment_status:
+        stmt = stmt.where(Order.payment_status == PaymentStatus(payment_status))
+    orders = db.scalars(stmt).unique().all()
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["order_id", "created_at", "customer_name", "customer_email", "order_status", "payment_status", "amount", "pickup_token", "gateway_order_id", "gateway_payment_id"])
+    for order in orders:
+        writer.writerow([order.id, order.created_at.isoformat() if order.created_at else "", order.user.full_name if order.user else "", order.user.email if order.user else "", order.status.value, order.payment_status.value, str(order.subtotal), order.token_number or "", order.gateway_order_id or "", order.gateway_payment_id or ""])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=ace-canteen-orders.csv", "Cache-Control": "no-store"})
+
+@app.get("/api/admin/payments/webhook-events", tags=["admin payment verification"], summary="Inspect received payment webhook event ledger")
+def admin_payment_webhook_events(
+    limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0),
+    _: User = Depends(require_roles("admin")), db: Session = Depends(get_db),
+):
+    events = db.scalars(select(PaymentWebhookEvent).order_by(PaymentWebhookEvent.received_at.desc()).offset(offset).limit(limit)).all()
+    return {"items": [{"id": event.id, "event_id": event.event_id, "event_name": event.event_name, "received_at": event.received_at.isoformat()} for event in events], "limit": limit, "offset": offset, "returned": len(events)}
 
 @app.patch("/api/admin/orders/{order_id}/status", tags=["order queue"])
 def update_order_status(order_id: int, payload: OrderStatusIn, staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
