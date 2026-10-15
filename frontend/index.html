@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12372a">
+  <meta name="description" content="ACE Canteen — the college canteen ordering platform.">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>ACE Canteen | Campus ordering</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="ACE Canteen home">
+      <img class="brand-logo" src="/assets/ace-logo.png" alt="ACE Engineering College logo">
+      <span><strong>ACE Canteen</strong><small>Campus food & essentials</small></span>
+    </a>
+    <div class="header-account">
+      <button class="secondary-button" id="install-app-button" type="button" hidden>Install app</button>
+      <a class="header-account-link" id="header-account-link" href="#account">Sign in / Account</a>
+      <span class="header-account-user" id="header-account-user" hidden></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">YOUR CAMPUS. YOUR CANTEEN.</p>
+        <h1>Good food.<br><span>Less waiting.</span></h1>
+        <p class="hero-description">A simpler way to order food and stationery on campus. Pay securely, follow your token, and pick up when your order is ready.</p>
+        <a class="primary-button" href="#catalogue">Browse the menu <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="hero-art hero-art-image">
+        <img src="/assets/canteen-hero.png" alt="Illustration for the ACE Canteen ordering application" fetchpriority="high">
+      </div>
+    </section>
+
+    <section class="catalogue-section" id="catalogue">
+      <div class="section-heading"><p class="eyebrow">CAMPUS CATALOGUE</p><h2>Food, drinks & stationery.</h2><p>Find what you need, check availability, and add items to your basket.</p></div>
+      <div class="catalogue-toolbar">
+        <input id="product-search" type="search" placeholder="Search food or stationery…" aria-label="Search catalogue">
+        <select id="product-type" aria-label="Filter catalogue"><option value="">All items</option><option value="food">Food</option><option value="stationery">Stationery</option></select><select id="product-category" aria-label="Filter by category"><option value="">All categories</option></select><select id="product-sort" aria-label="Sort catalogue"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="price:asc">Price low to high</option><option value="price:desc">Price high to low</option></select>
+      </div>
+      <p class="catalogue-message" id="catalogue-message" role="status" aria-live="polite">Loading catalogue…</p>
+      <div class="catalogue-grid" id="catalogue-grid"></div><button class="secondary-button" id="catalogue-load-more" type="button">Load more items</button>
+    </section>
+
+    <section class="cart-section" id="cart-section" aria-labelledby="cart-heading">
+      <div class="section-heading"><p class="eyebrow">YOUR BASKET · SECURE CHECKOUT</p><h2 id="cart-heading">Your order basket.</h2><p>Add food or stationery, review the server-calculated total, and pay securely with Razorpay (UPI, cards, and supported methods).</p></div>
+      <div class="management-card cart-card">
+        <div class="management-list-head"><h3>Cart items</h3><button type="button" class="secondary-button" id="cart-clear">Clear cart</button></div>
+        <p class="management-message" id="cart-message" role="status" aria-live="polite">Your cart is empty. Add items from the catalogue above.</p>
+        <div id="cart-items" class="cart-items"></div>
+        <div class="cart-summary"><span>Estimated subtotal</span><strong id="cart-subtotal">₹0.00</strong></div>
+        <label class="cart-notes-label" for="checkout-notes">Order notes (optional)<textarea id="checkout-notes" maxlength="500" rows="3" placeholder="Any useful pickup or preparation note (max 500 characters)"></textarea></label>
+        <div class="cart-actions"><button type="button" class="secondary-button" id="cart-review">Review total</button><button type="button" class="primary-button" id="cart-checkout">Pay & place order</button></div>
+        <p class="cart-disclaimer">Payments are verified by the server. Use Razorpay test keys to test checkout; live payments require live keys and a configured webhook.</p>
+      </div>
+    </section>
+
+    <section class="orders-section" id="my-orders-section" hidden>
+      <div class="section-heading"><p class="eyebrow">STUDENT · YOUR ORDERS</p><h2>My orders & tokens.</h2><p>Follow each paid order through preparation, see your current queue position, and collect it when the token is ready.</p></div>
+      <div class="management-card"><div class="management-list-head"><h3>Order history</h3><button class="secondary-button" id="refresh-my-orders" type="button">Refresh orders</button></div><p id="my-orders-message" class="management-message" role="status"></p><div id="my-orders-list"></div></div>
+    </section>
+
+    <section class="orders-section" id="pickup-queue-section" aria-labelledby="pickup-queue-heading">
+      <div class="section-heading"><p class="eyebrow">PICKUP BOARD</p><h2 id="pickup-queue-heading">Today’s pickup queue.</h2><p>Track preparation and collection using token numbers. Names and personal details are never shown on this public board.</p></div>
+      <div class="queue-summary-grid" aria-live="polite">
+        <div class="queue-stat"><span>Active orders</span><strong id="queue-active-count">—</strong></div>
+        <div class="queue-stat"><span>Preparing tokens</span><strong id="queue-preparing-tokens">—</strong></div>
+        <div class="queue-stat"><span>Ready for pickup</span><strong id="queue-ready-tokens">—</strong></div>
+      </div>
+      <p class="management-message" id="public-queue-message" role="status" aria-live="polite">Loading today’s queue…</p>
+      <div class="management-card" id="public-queue-list"></div>
+      <p class="queue-estimate-note" id="queue-estimate-note">Wait times are estimates and may change.</p>
+    </section>
+
+    <section class="admin-section" id="catalogue-management" hidden>
+      <div class="section-heading"><p class="eyebrow">STAFF & ADMIN</p><h2>Catalogue management.</h2><p>Staff can add and update products. Administrators can also create categories. Changes are saved to the database.</p></div>
+      <div class="phase10-workflow" id="staff-workflow-dashboard">
+        <div class="section-heading workflow-heading"><p class="eyebrow">PHASE 10 · STAFF OPERATIONS</p><h2>Kitchen & pickup counter.</h2><p>Use the kitchen board to accept and prepare paid orders. Use the counter board to mark ready orders as collected. Boards refresh automatically.</p></div>
+        <div class="queue-summary-grid workflow-summary" aria-live="polite">
+          <div class="queue-stat"><span>Kitchen waiting</span><strong id="workflow-kitchen-waiting">—</strong></div>
+          <div class="queue-stat"><span>Being prepared</span><strong id="workflow-kitchen-preparing">—</strong></div>
+          <div class="queue-stat"><span>Ready to collect</span><strong id="workflow-ready-pickup">—</strong></div>
+          <div class="queue-stat"><span>Completed today</span><strong id="workflow-completed-today">—</strong></div>
+        </div>
+        <div class="management-grid workflow-boards">
+          <div class="management-card management-list"><div class="management-list-head"><h3>Kitchen board</h3><button class="secondary-button" id="refresh-kitchen-board" type="button">Refresh</button></div><p class="management-message" id="kitchen-board-message" role="status">Waiting for kitchen orders…</p><div id="kitchen-board-list"></div></div>
+          <div class="management-card management-list"><div class="management-list-head"><h3>Pickup counter</h3><button class="secondary-button" id="refresh-counter-board" type="button">Refresh</button></div><p class="management-message" id="counter-board-message" role="status">Waiting for ready orders…</p><div id="counter-board-list"></div></div>
+        </div>
+      </div>
+      <div class="management-card management-list" id="order-queue-panel"><div class="management-list-head"><h3>Incoming orders & live queue</h3><div><button class="secondary-button" id="refresh-order-queue" type="button">Refresh queue</button><select id="queue-status-filter" aria-label="Filter queue"><option value="">All statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="preparing">Preparing</option><option value="ready">Ready</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></div></div><p class="management-message" id="order-queue-message" role="status">Incoming student orders will appear here.</p><div id="order-queue-list"></div></div>
+      <div class="management-grid">
+        <form class="management-card" id="product-form">
+          <h3>Add a product</h3>
+          <label>Product name<input id="new-product-name" required minlength="2" maxlength="120" placeholder="e.g. Veg sandwich"></label>
+          <label>Description<input id="new-product-description" maxlength="2000" placeholder="Short description"></label>
+          <label>Image URL (optional)<input id="new-product-image" type="text" inputmode="url" maxlength="500" placeholder="https://… or /assets/item.jpg"></label>
+          <label>Dietary information<input id="new-product-dietary" maxlength="255" placeholder="e.g. Vegetarian, vegan"></label>
+          <label>Allergens<input id="new-product-allergens" maxlength="255" placeholder="e.g. Milk, peanuts, gluten; leave blank if unknown"></label>
+          <label>Item type<select id="new-product-type" required><option value="food">Food</option><option value="stationery">Stationery</option></select></label>
+          <label>Category<select id="new-product-category" required></select></label>
+          <div class="form-pair"><label>Price (₹)<input id="new-product-price" type="number" min="0.01" step="0.01" required></label><label>Stock quantity<input id="new-product-stock" type="number" min="0" step="1" value="10" required></label></div>
+          <button class="primary-button" type="submit">Save product</button><p class="management-message" id="product-form-message" role="status"></p>
+        </form>
+        <form class="management-card" id="category-form" hidden>
+          <h3>Add a category</h3>
+          <label>Category name<input id="new-category-name" required minlength="2" maxlength="80" placeholder="e.g. Bakery"></label>
+          <label>Slug<input id="new-category-slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="90" placeholder="e.g. bakery"></label>
+          <label>Item type<select id="new-category-type"><option value="food">Food</option><option value="stationery">Stationery</option></select></label>
+          <label>Description<input id="new-category-description" maxlength="255" placeholder="Category description"></label>
+          <button class="primary-button" type="submit">Save category</button><p class="management-message" id="category-form-message" role="status"></p>
+        </form>
+      </div>
+      <div class="management-card management-list" id="category-management" hidden><div class="management-list-head"><h3>Manage categories</h3><button type="button" class="secondary-button" id="refresh-categories">Refresh categories</button></div><p class="management-message" id="manage-categories-message" role="status"></p><div id="manage-categories-list"></div></div>
+      <div class="management-card management-list" id="user-management" hidden><div class="management-list-head"><h3>Manage users</h3><button type="button" class="secondary-button" id="refresh-users">Refresh users</button></div><p class="management-message" id="manage-users-message" role="status"></p><div id="manage-users-list"></div></div>
+      <div class="management-card management-list"><div class="management-list-head"><h3>Manage products</h3><button type="button" class="secondary-button" id="refresh-products">Refresh list</button></div><p class="management-message" id="manage-products-message" role="status">Sign in with a staff or admin account to manage catalogue items.</p><div id="manage-products-list"></div></div>
+      <section class="inventory-panel" id="inventory-management" aria-labelledby="inventory-heading">
+        <div class="section-heading workflow-heading"><p class="eyebrow">PHASE 11 · INVENTORY CONTROL</p><h2 id="inventory-heading">Stock, alerts & movement history.</h2><p>Record every receipt, physical stock count and write-off. Low-stock alerts are calculated from each product’s configurable threshold.</p></div>
+        <div class="queue-summary-grid inventory-summary" aria-live="polite">
+          <div class="queue-stat"><span>Tracked products</span><strong id="inventory-product-count">—</strong></div><div class="queue-stat"><span>Total units</span><strong id="inventory-unit-count">—</strong></div><div class="queue-stat"><span>Low-stock alerts</span><strong id="inventory-low-count">—</strong></div><div class="queue-stat"><span>Out of stock</span><strong id="inventory-empty-count">—</strong></div>
+        </div>
+        <div class="management-grid inventory-grid">
+          <form class="management-card" id="inventory-adjustment-form"><h3>Update stock</h3>
+            <label>Product<select id="inventory-product" required></select></label>
+            <label>Movement type<select id="inventory-movement-type"><option value="receipt">Receive stock (+)</option><option value="adjustment">Physical count (set exact quantity)</option><option value="waste">Write off / waste (−)</option></select></label>
+            <label id="inventory-quantity-label">Quantity<input id="inventory-quantity" type="number" min="1" max="100000" step="1" required></label>
+            <label>Reason<input id="inventory-reason" required minlength="3" maxlength="255" placeholder="e.g. Weekly supplier delivery"></label>
+            <button class="primary-button" type="submit">Save stock movement</button><p class="management-message" id="inventory-form-message" role="status"></p>
+          </form>
+          <div class="management-card"><h3>Low-stock alert settings</h3><label>Product<select id="inventory-threshold-product"></select></label><label>Alert when stock is at or below<input id="inventory-threshold-value" type="number" min="0" max="100000" step="1" value="5" required></label><button type="button" class="secondary-button" id="save-inventory-threshold">Save threshold</button><p class="management-message" id="inventory-threshold-message" role="status"></p><p class="inventory-help">Example: threshold 5 means stock of 5, 4, 3… triggers an alert.</p></div>
+        </div>
+        <div class="management-card management-list inventory-alerts"><div class="management-list-head"><h3>Low-stock alerts</h3><button type="button" class="secondary-button" id="refresh-inventory">Refresh inventory</button></div><p class="management-message" id="inventory-alert-message" role="status">Loading inventory…</p><div id="inventory-alert-list"></div></div>
+        <div class="management-card management-list inventory-ledger"><div class="management-list-head"><h3>Inventory movement ledger</h3><div class="inventory-filters"><select id="inventory-ledger-product" aria-label="Filter by product"><option value="">All products</option></select><select id="inventory-ledger-type" aria-label="Filter by movement type"><option value="">All movement types</option><option value="initial">Initial</option><option value="receipt">Receipt</option><option value="adjustment">Adjustment</option><option value="waste">Waste</option><option value="reservation">Reservation</option><option value="release">Release</option></select><button type="button" class="secondary-button" id="refresh-inventory-ledger">Refresh ledger</button></div></div><p class="management-message" id="inventory-ledger-message" role="status">Loading movement history…</p><div class="inventory-ledger-list" id="inventory-ledger-list"></div></div>
+      </section>
+      <section class="admin-reporting-panel" id="admin-reporting" hidden aria-labelledby="admin-reporting-heading">
+        <div class="section-heading workflow-heading"><p class="eyebrow">PHASE 12 · ADMIN ANALYTICS</p><h2 id="admin-reporting-heading">Sales, operations & audit trail.</h2><p>Review paid sales and order status for a date range, identify best-selling products, and inspect recorded privileged changes.</p></div>
+        <form class="management-card report-filters" id="report-filter-form"><label>From date<input id="report-start-date" type="date" required></label><label>To date<input id="report-end-date" type="date" required></label><button type="submit" class="primary-button">Run reports</button><button type="button" class="secondary-button" id="export-daily-sales">Export daily sales CSV</button></form>
+        <p class="management-message" id="report-message" role="status">Choose a date range and run reports.</p>
+        <div class="queue-summary-grid report-kpis" aria-live="polite"><div class="queue-stat"><span>Paid revenue</span><strong id="report-revenue">—</strong></div><div class="queue-stat"><span>Paid orders</span><strong id="report-paid-orders">—</strong></div><div class="queue-stat"><span>All orders</span><strong id="report-all-orders">—</strong></div><div class="queue-stat"><span>Average order value</span><strong id="report-average-order">—</strong></div></div>
+        <div class="management-grid report-grid"><div class="management-card management-list"><h3>Orders by status</h3><div id="report-status-list"></div></div><div class="management-card management-list"><h3>Top-selling products</h3><div id="report-top-products"></div></div></div>
+        <div class="management-card management-list"><div class="management-list-head"><h3>Daily paid sales</h3><button type="button" class="secondary-button" id="refresh-reports">Refresh reports</button></div><div class="report-table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Paid orders</th><th>Revenue</th></tr></thead><tbody id="report-daily-sales"></tbody></table></div></div>
+        <div class="management-card management-list admin-audit-list"><div class="management-list-head"><h3>Audit trail</h3><button type="button" class="secondary-button" id="refresh-audit-events">Refresh audit trail</button></div><div class="report-audit-filters"><select id="audit-entity-filter" aria-label="Filter audit by entity"><option value="">All entities</option><option value="user">Users</option><option value="product">Products</option><option value="order">Orders</option></select><select id="audit-action-filter" aria-label="Filter audit by action"><option value="">All actions</option><option value="order.status_changed">Order status changes</option><option value="inventory.stock_changed">Stock changes</option><option value="inventory.threshold_changed">Stock threshold changes</option><option value="product.created">Product created</option><option value="product.updated">Product updated</option><option value="product.archived">Product archived</option><option value="user.role_changed">User role changes</option><option value="user.activation_changed">User activation changes</option></select></div><p class="management-message" id="audit-message" role="status">Audit events will appear here.</p><div id="audit-events-list"></div></div>
+      </section>
+    </section>
+
+    <section class="auth-section" id="account">
+      <div class="section-heading"><p class="eyebrow">PHASE 3 · STUDENT ACCOUNTS</p><h2>Your campus account.</h2><p>Create a student account or sign in. Staff and admin roles are assigned securely by an administrator.</p></div>
+      <div class="auth-card">
+        <div class="auth-tabs"><button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button><button type="button" class="auth-tab" data-auth-mode="register">Create account</button></div>
+        <form id="auth-form">
+          <label id="auth-name-wrap" hidden>Full name<input id="auth-name" autocomplete="name" minlength="2" maxlength="120" placeholder="Your full name"></label>
+          <label>Email address<input id="auth-email" type="email" autocomplete="email" required placeholder="you@college.edu"></label>
+          <label>Password<input id="auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="At least 12 characters"></label>
+          <button class="primary-button auth-submit" type="submit" id="auth-submit">Sign in</button>
+        </form>
+        <p id="auth-message" class="auth-message" role="status" aria-live="polite">You are not signed in.</p>
+        <div id="account-panel" class="account-panel" hidden><strong id="account-name"></strong><span id="account-role"></span><section class="notification-center" id="notification-center" aria-labelledby="notification-heading"><div class="management-list-head"><h3 id="notification-heading">Notifications <span class="notification-count" id="notification-unread-count">0 unread</span></h3><button type="button" class="secondary-button" id="notifications-mark-all">Mark all read</button></div><p class="management-message" id="notification-message" role="status" aria-live="polite">Your updates will appear here.</p><div id="notification-list" class="notification-list"></div></section><form id="change-password-form" class="password-change-form"><label>Current password<input id="current-password" type="password" required autocomplete="current-password"></label><label>New password (12+ characters)<input id="new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit" class="secondary-button">Change password</button><p id="password-change-message" class="auth-message" role="status"></p></form><button type="button" class="secondary-button" id="auth-logout">Sign out</button></div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer><a class="footer-brand" href="/">ACE Canteen</a><span>Built for the campus community.</span><span>Student orders, queue and catalogue management</span></footer>
+</body>
+</html>

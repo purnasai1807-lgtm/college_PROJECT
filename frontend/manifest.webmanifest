@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "ACE Canteen",
+  "short_name": "ACE Canteen",
+  "description": "Campus food and stationery ordering for ACE Engineering College.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f6f0",
+  "theme_color": "#12372a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/ace-logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+backend/.env
+backend/ace_canteen.db
+backend/ace_canteen.db-*
+.coverage
+htmlcov/
+
+# Local database backups
+backups/
+
+# Browser test artifacts
+node_modules/
+playwright-report/
+test-results/
+backend/e2e_canteen.db*
+backend/ci_canteen.db*
+
+# Operational backups and logs
+backups/
+*.log
