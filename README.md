@@ -97,3 +97,8 @@ The admin control centre now includes:
 - `GET /api/admin/payments/webhook-events`: paginated view of received webhook event IDs/names/timestamps for reconciliation.
 
 All three endpoints require the administrator role. They are backend APIs; a polished dedicated frontend page for these additional panels is a separate remaining UI task. Payment states must still be confirmed by the payment provider flow, not manually edited by an administrator.
+
+
+## Phase 46 — Admin governance
+
+See `docs/PHASE46-ADMIN-GOVERNANCE.md` for last-active-admin safeguards and audit-event investigation filters.

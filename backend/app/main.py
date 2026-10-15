@@ -394,6 +394,10 @@ def update_user_role(user_id: int, payload: RoleUpdateIn, admin: User = Depends(
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == admin.id and payload.role != UserRole.ADMIN:
         raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
+    if user.role == UserRole.ADMIN and payload.role != UserRole.ADMIN and user.is_active:
+        other_admins = db.scalar(select(func.count()).select_from(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True), User.id != user.id)) or 0
+        if other_admins == 0:
+            raise HTTPException(status_code=409, detail="Cannot demote the last active administrator. Promote another active account first.")
     old_role = user.role.value
     user.role = payload.role
     _record_audit(db, "user.role_changed", "user", user.id, admin.id, {"old_role": old_role, "new_role": payload.role.value})
@@ -408,6 +412,10 @@ def set_user_active(user_id: int, active: bool = Query(...), admin: User = Depen
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == admin.id and not active:
         raise HTTPException(status_code=400, detail="You cannot disable your own admin account")
+    if user.role == UserRole.ADMIN and user.is_active and not active:
+        other_admins = db.scalar(select(func.count()).select_from(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True), User.id != user.id)) or 0
+        if other_admins == 0:
+            raise HTTPException(status_code=409, detail="Cannot disable the last active administrator. Activate another administrator first.")
     old_active = user.is_active
     user.is_active = active
     _record_audit(db, "user.activation_changed", "user", user.id, admin.id, {"old_active": old_active, "new_active": active})
@@ -663,10 +671,12 @@ def admin_report_top_products(start_date: str | None = Query(default=None), end_
     return [{"product_id": row.product_id, "product_name": row.product_name, "quantity_sold": int(row.quantity_sold), "sales": str(row.sales)} for row in rows]
 
 @app.get("/api/admin/audit-events", tags=["admin audit"], summary="Search administrative and operational audit events")
-def admin_audit_events(action: str | None = Query(default=None, max_length=80), entity_type: str | None = Query(default=None, max_length=80), limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+def admin_audit_events(action: str | None = Query(default=None, max_length=80), entity_type: str | None = Query(default=None, max_length=80), actor_user_id: int | None = Query(default=None, ge=1), entity_id: str | None = Query(default=None, max_length=80), limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     stmt = select(AuditEvent).options(joinedload(AuditEvent.actor)).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
     if action: stmt = stmt.where(AuditEvent.action == action)
     if entity_type: stmt = stmt.where(AuditEvent.entity_type == entity_type)
+    if actor_user_id is not None: stmt = stmt.where(AuditEvent.actor_user_id == actor_user_id)
+    if entity_id: stmt = stmt.where(AuditEvent.entity_id == entity_id)
     rows = db.scalars(stmt.offset(offset).limit(limit)).unique().all()
     return [{"id": e.id, "actor_user_id": e.actor_user_id, "actor_name": e.actor.full_name if e.actor else None, "action": e.action, "entity_type": e.entity_type, "entity_id": e.entity_id, "details": json.loads(e.details_json or "{}"), "created_at": e.created_at} for e in rows]
 
