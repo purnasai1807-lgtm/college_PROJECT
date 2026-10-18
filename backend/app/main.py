@@ -1258,7 +1258,7 @@ def update_order_status(order_id: int, payload: OrderStatusIn, staff: User = Dep
 # Phase 26-37 operational release: supplier traceability, batch expiry, and demand insights.
 from pydantic import BaseModel, Field
 from datetime import date as _date
-from app.models import Supplier, ProductBatch, BatchReservation
+from app.models import Supplier, ProductBatch, BatchReservation, PurchaseOrder
 
 def _reserve_batch_stock(db: Session, product_id: int, quantity: int, order_id: int) -> None:
     """Consume available non-expired batches in FEFO order and retain allocations.
@@ -1378,3 +1378,85 @@ def demand_analytics(days: int = Query(default=30, ge=7, le=180), limit: int = Q
     since = datetime.now() - timedelta(days=days)
     rows = db.execute(select(OrderItem.product_id, OrderItem.product_name, func.sum(OrderItem.quantity).label("units"), func.count(func.distinct(OrderItem.order_id)).label("orders")).join(Order, Order.id == OrderItem.order_id).where(Order.payment_status == PaymentStatus.PAID, Order.created_at >= since).group_by(OrderItem.product_id, OrderItem.product_name).order_by(func.sum(OrderItem.quantity).desc()).limit(limit)).all()
     return {"window_days": days, "generated_at": datetime.now().isoformat(), "method": "historical paid-order average; excludes seasonality and stockouts", "products": [{"product_id": int(r.product_id), "product_name": r.product_name, "units_sold": int(r.units or 0), "orders": int(r.orders or 0), "average_units_per_day": round(float(r.units or 0) / days, 2), "suggested_reorder_units": max(0, round(float(r.units or 0) / days * 3))} for r in rows]}
+
+
+# Phase 49: safe payment reconciliation. This endpoint reports exceptions; it never
+# marks an order paid or failed based on age alone and never triggers refunds.
+@app.get("/api/admin/payments/reconciliation", tags=["admin payment verification"])
+def payment_reconciliation(older_than_minutes: int = Query(default=15, ge=1, le=10080), limit: int = Query(default=200, ge=1, le=1000), _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    cutoff = datetime.now().astimezone() - timedelta(minutes=older_than_minutes)
+    rows = db.scalars(select(Order).options(joinedload(Order.user)).where(
+        Order.payment_status.in_([PaymentStatus.PENDING, PaymentStatus.FAILED])
+    ).order_by(Order.created_at.asc()).limit(limit)).unique().all()
+    items = []
+    for order in rows:
+        created = order.created_at
+        age_minutes = max(0, int((datetime.now().astimezone() - (created if created.tzinfo else created.astimezone())).total_seconds() // 60)) if created else 0
+        if age_minutes < older_than_minutes and order.payment_status != PaymentStatus.FAILED:
+            continue
+        items.append({"order_id": order.id, "customer_email": order.user.email if order.user else None, "order_status": order.status.value, "payment_status": order.payment_status.value, "amount": str(order.subtotal), "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "age_minutes": age_minutes, "recommended_action": "verify_with_provider_before_manual_change" if order.payment_status == PaymentStatus.PENDING else "review_provider_failure_and_stock_release"})
+    return {"generated_at": datetime.now().astimezone().isoformat(), "older_than_minutes": older_than_minutes, "items": items, "count": len(items), "safety_note": "Diagnostic only: confirm provider state before changing payment records. No automatic capture, status mutation, or refund is performed."}
+
+# Phase 50: purchase orders, supplier workflow, and safe stock receipt.
+class PurchaseOrderLineIn(BaseModel):
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=100000)
+    unit_cost: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    expiry_date: _date | None = None
+
+class PurchaseOrderCreateIn(BaseModel):
+    supplier_id: int = Field(gt=0)
+    lines: list[PurchaseOrderLineIn] = Field(min_length=1, max_length=100)
+    notes: str | None = Field(default=None, max_length=500)
+
+@app.post("/api/admin/purchase-orders", status_code=201, tags=["procurement"])
+def create_purchase_order(payload: PurchaseOrderCreateIn, admin: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    supplier = db.get(Supplier, payload.supplier_id)
+    if supplier is None or not supplier.is_active:
+        raise HTTPException(status_code=404, detail="Active supplier not found")
+    lines = []
+    for line in payload.lines:
+        product = db.get(Product, line.product_id)
+        if product is None or product.is_archived:
+            raise HTTPException(status_code=404, detail=f"Active product {line.product_id} not found")
+        if line.expiry_date and line.expiry_date < _date.today():
+            raise HTTPException(status_code=422, detail="Purchase line expiry date cannot be in the past")
+        lines.append({"product_id": product.id, "product_name": product.name, "quantity": line.quantity, "unit_cost": str(line.unit_cost), "expiry_date": line.expiry_date.isoformat() if line.expiry_date else None})
+    po = PurchaseOrder(supplier_id=supplier.id, created_by_user_id=admin.id, status="ordered", lines_json=json.dumps(lines), notes=payload.notes, ordered_at=datetime.now().astimezone())
+    db.add(po); db.flush()
+    _record_audit(db, "procurement.purchase_order_created", "purchase_order", po.id, admin.id, {"supplier_id": supplier.id, "line_count": len(lines)})
+    db.commit(); db.refresh(po)
+    return _purchase_order_payload(po, supplier.name)
+
+def _purchase_order_payload(po: PurchaseOrder, supplier_name: str | None = None):
+    return {"id": po.id, "supplier_id": po.supplier_id, "supplier_name": supplier_name, "status": po.status, "lines": json.loads(po.lines_json), "notes": po.notes, "created_at": po.created_at.isoformat() if po.created_at else None, "ordered_at": po.ordered_at.isoformat() if po.ordered_at else None, "received_at": po.received_at.isoformat() if po.received_at else None}
+
+@app.get("/api/admin/purchase-orders", tags=["procurement"])
+def list_purchase_orders(status: str | None = Query(default=None, pattern="^(ordered|received)$"), limit: int = Query(default=100, ge=1, le=500), _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+    stmt = select(PurchaseOrder).order_by(PurchaseOrder.created_at.desc()).limit(limit)
+    if status: stmt = stmt.where(PurchaseOrder.status == status)
+    rows = db.scalars(stmt).all()
+    return [_purchase_order_payload(po, (db.get(Supplier, po.supplier_id).name if db.get(Supplier, po.supplier_id) else None)) for po in rows]
+
+@app.post("/api/admin/purchase-orders/{purchase_order_id}/receive", tags=["procurement"])
+def receive_purchase_order(purchase_order_id: int, staff: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+    po = db.scalar(select(PurchaseOrder).where(PurchaseOrder.id == purchase_order_id).with_for_update())
+    if po is None: raise HTTPException(status_code=404, detail="Purchase order not found")
+    if po.status == "received": return {"purchase_order": _purchase_order_payload(po), "already_received": True}
+    if po.status != "ordered": raise HTTPException(status_code=409, detail="Only ordered purchase orders can be received")
+    lines = json.loads(po.lines_json)
+    for line in lines:
+        product = db.scalar(select(Product).where(Product.id == line["product_id"]).options(joinedload(Product.category)).with_for_update())
+        if product is None or product.is_archived: raise HTTPException(status_code=409, detail="A purchase order product is no longer active")
+        expiry = _date.fromisoformat(line["expiry_date"]) if line.get("expiry_date") else None
+        if expiry and expiry < _date.today(): raise HTTPException(status_code=409, detail="Cannot receive expired purchase stock")
+        quantity = int(line["quantity"]); before = product.stock_quantity
+        product.stock_quantity += quantity
+        product.is_available = bool(product.category.is_active and product.stock_quantity > 0)
+        db.add(ProductBatch(product_id=product.id, supplier_id=po.supplier_id, batch_code=f"PO-{po.id}-P{product.id}-{uuid.uuid4().hex[:6]}", quantity_received=quantity, quantity_remaining=quantity, unit_cost=Decimal(line["unit_cost"]), received_date=_date.today(), expiry_date=expiry, notes=f"Received from purchase order {po.id}", created_by_user_id=staff.id))
+        _record_stock_movement(db, product, quantity, InventoryMovementType.RECEIPT, f"Purchase order {po.id} received", actor_user_id=staff.id, before=before)
+    po.status = "received"; po.received_at = datetime.now().astimezone()
+    _record_audit(db, "procurement.purchase_order_received", "purchase_order", po.id, staff.id, {"line_count": len(lines)})
+    db.commit(); db.refresh(po)
+    supplier = db.get(Supplier, po.supplier_id)
+    return {"purchase_order": _purchase_order_payload(po, supplier.name if supplier else None), "already_received": False}

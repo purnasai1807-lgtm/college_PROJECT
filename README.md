@@ -127,3 +127,6 @@ python -m pytest -q
 ```
 
 Phase 48 adds four order-investigation tests. Current full suite: 98 passed.
+
+## Latest release: Phases 49–53
+See `PHASE49-53-RELEASE-NOTES.md` for payment reconciliation, purchase order receiving, browser acceptance coverage, production readiness gates, and student UX notes. Purchase orders use Alembic migration `0014_purchase_orders`; run the normal migration step before using an existing database. Admin payment reconciliation is diagnostic only and does not mutate payment status or issue refunds.

@@ -34,3 +34,9 @@ At packaging time, the full backend suite passed: **98 tests**. This is local au
 - No refund functionality is included.
 - Razorpay live credentials are not included. Use test credentials and verify webhook delivery/retries in a staging environment before launch.
 - Back up an existing database before upgrading; do not ship or replace the user's database with this source ZIP.
+
+## Integrated Release — Phases 1–53
+
+This release extends the Phase 48 project with Phases 49–53. New features include an admin-only payment exception/reconciliation report, supplier purchase orders with idempotent receiving into traceable batches, additional Playwright acceptance cases, and updated production-readiness and student-experience documentation. See `PHASE49-53-RELEASE-NOTES.md`.
+
+Backend regression verification for this package: **100 tests passed**. Python compilation and Node syntax checks passed. Browser tests were added but not executed in this environment; live Razorpay and production infrastructure checks remain outstanding. No refund functionality is included.
