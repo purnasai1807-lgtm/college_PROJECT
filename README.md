@@ -114,3 +114,16 @@ See `docs/PHASE46-ADMIN-GOVERNANCE.md` for last-active-admin safeguards and audi
 ### Phase 47 verification
 
 From `clg/backend`, run `pytest -q`. The Phase 47 suite adds tests for staff creation, duplicate emails, forbidden student creation through the staff endpoint, role authorization, password length validation, audit recording, and session invalidation after role changes.
+
+## Phase 48 — Order investigation dossier
+
+Administrators can use **Investigate** from the all-orders register to open a complete per-order dossier. The admin-only endpoint `GET /api/admin/orders/{order_id}/investigation` returns the historical item/price snapshot, customer and pickup details, order/payment state and gateway identifiers, plus a chronological timeline assembled from order audit events and inventory movements. It includes an explicit caution that stored gateway identifiers are not proof of settlement; verify payment with the provider dashboard. Staff and students cannot access this endpoint. No refund functionality is provided.
+
+Run the complete test suite from the `clg` project root:
+
+```powershell
+$env:PYTHONPATH = "backend"
+python -m pytest -q
+```
+
+Phase 48 adds four order-investigation tests. Current full suite: 98 passed.

@@ -953,6 +953,7 @@ window.setInterval(() => {
           order.status, order.payment_status, `₹${Number(order.subtotal || 0).toFixed(2)}`, order.token_number || '—'
         ];
         for (const value of values) { const td = document.createElement('td'); td.textContent = value; tr.append(td); }
+        const actionCell = document.createElement('td'); const investigate = document.createElement('button'); investigate.type = 'button'; investigate.className = 'secondary-button'; investigate.textContent = 'Investigate'; investigate.addEventListener('click', () => loadOrderInvestigation(order.id)); actionCell.append(investigate); tr.append(actionCell);
         body.append(tr);
       }
       message('admin-orders-message', `${data.returned} order(s) shown. All payment states are included unless filtered.`);
@@ -960,6 +961,23 @@ window.setInterval(() => {
       $('admin-orders-prev').disabled = page === 0;
       $('admin-orders-next').disabled = data.returned < pageSize;
     } catch (e) { message('admin-orders-message', e.message, true); }
+  }
+  async function loadOrderInvestigation(orderId) {
+    const panel = $('order-investigation-panel'), content = $('order-investigation-content');
+    panel.hidden = false; content.replaceChildren(); message('order-investigation-message', `Loading investigation for order #${orderId}…`);
+    try {
+      const data = await request(`/api/admin/orders/${encodeURIComponent(orderId)}/investigation`), order = data.order, inv = data.investigation;
+      const heading = document.createElement('h4'); heading.textContent = `Order #${order.id} · ${order.status} · payment ${order.payment_status}`; content.append(heading);
+      const customer = document.createElement('p'); customer.textContent = `Customer: ${order.customer?.name || '—'} (${order.customer?.email || '—'}) · Total: ₹${Number(order.subtotal).toFixed(2)} · Pickup token: ${order.token_number ?? '—'}`; content.append(customer);
+      const payment = document.createElement('p'); payment.textContent = `Gateway order: ${order.gateway_order_id || 'not recorded'} · Gateway payment: ${order.gateway_payment_id || 'not recorded'} · Signature stored: ${inv.payment_evidence.signature_present ? 'yes' : 'no'}`; content.append(payment);
+      const note = document.createElement('p'); note.textContent = inv.payment_evidence.note; content.append(note);
+      const itemsTitle = document.createElement('h4'); itemsTitle.textContent = 'Purchased item snapshot'; content.append(itemsTitle);
+      const items = document.createElement('ul'); for (const item of order.items || []) { const li = document.createElement('li'); li.textContent = `${item.name} × ${item.quantity} · ₹${Number(item.unit_price).toFixed(2)} each · ₹${Number(item.line_total).toFixed(2)}`; items.append(li); } content.append(items);
+      const timelineTitle = document.createElement('h4'); timelineTitle.textContent = `Timeline (${inv.timeline.length} events)`; content.append(timelineTitle);
+      const timeline = document.createElement('ol'); for (const event of inv.timeline) { const li = document.createElement('li'); li.textContent = `${event.at || 'Time unavailable'} · ${event.kind} · ${event.action} · ${JSON.stringify(event.details || {})}`; timeline.append(li); } if (!inv.timeline.length) { const li = document.createElement('li'); li.textContent = 'No recorded audit or inventory events for this order.'; timeline.append(li); } content.append(timeline);
+      message('order-investigation-message', `Loaded ${inv.audit_event_count} audit event(s) and ${inv.inventory_movement_count} inventory movement(s).`);
+      panel.scrollIntoView({behavior:'smooth',block:'start'});
+    } catch (e) { message('order-investigation-message', e.message, true); }
   }
   async function loadWebhooks() {
     try {
@@ -976,6 +994,7 @@ window.setInterval(() => {
     } catch (e) { message('admin-webhook-message', e.message, true); }
   }
   $('admin-refresh-orders').addEventListener('click', () => { page=0; loadSummary(); loadOrders(); });
+  $('close-order-investigation').addEventListener('click', () => { $('order-investigation-panel').hidden = true; });
   ['admin-order-status','admin-payment-status'].forEach(id => $(id).addEventListener('change', () => { page=0; loadOrders(); }));
   $('admin-order-search').addEventListener('input', () => { clearTimeout(debounce); debounce=setTimeout(() => { page=0; loadOrders(); }, 300); });
   $('admin-orders-prev').addEventListener('click', () => { if (page > 0) { page--; loadOrders(); } });

@@ -162,7 +162,8 @@
           <button type="button" class="secondary-button" id="admin-export-orders">Export CSV</button>
         </div>
         <p id="admin-orders-message" role="status" aria-live="polite"></p>
-        <div class="table-scroll"><table class="admin-orders-table"><thead><tr><th>Order</th><th>Customer</th><th>Created</th><th>Order status</th><th>Payment</th><th>Amount</th><th>Pickup</th></tr></thead><tbody id="admin-orders-body"></tbody></table></div>
+        <div class="table-scroll"><table class="admin-orders-table"><thead><tr><th>Order</th><th>Customer</th><th>Created</th><th>Order status</th><th>Payment</th><th>Amount</th><th>Pickup</th><th>Investigation</th></tr></thead><tbody id="admin-orders-body"></tbody></table></div>
+        <div class="management-card" id="order-investigation-panel" hidden><div class="management-list-head"><h3>Order investigation dossier</h3><button type="button" class="secondary-button" id="close-order-investigation">Close dossier</button></div><p class="management-message" id="order-investigation-message" role="status"></p><div id="order-investigation-content"></div></div>
         <div class="admin-pagination"><button type="button" class="secondary-button" id="admin-orders-prev">Previous</button><span id="admin-orders-page">Page 1</span><button type="button" class="secondary-button" id="admin-orders-next">Next</button></div>
         <div class="section-heading admin-webhook-heading"><h3>Payment webhook event ledger</h3><p>Event metadata for payment troubleshooting; sensitive signatures are not displayed.</p></div>
         <button type="button" class="secondary-button" id="admin-refresh-webhooks">Refresh webhook events</button>

@@ -1145,6 +1145,29 @@ def admin_all_orders(
         result.append(data)
     return {"items": result, "limit": limit, "offset": offset, "returned": len(result)}
 
+@app.get("/api/admin/orders/{order_id}/investigation", tags=["admin order verification"], summary="Complete order investigation dossier")
+def admin_order_investigation(order_id: int, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    """Admin-only order dossier: immutable purchase snapshot, payment identifiers, audit history and stock movements."""
+    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items), joinedload(Order.user)))
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    audit_rows = db.scalars(select(AuditEvent).where(AuditEvent.entity_type == "order", AuditEvent.entity_id == str(order.id)).order_by(AuditEvent.created_at.asc()).limit(500)).all()
+    stock_rows = db.scalars(select(InventoryMovement).where(InventoryMovement.order_id == order.id).options(joinedload(InventoryMovement.product), joinedload(InventoryMovement.actor)).order_by(InventoryMovement.created_at.asc()).limit(500)).all()
+    timeline = []
+    for event in audit_rows:
+        try:
+            details = json.loads(event.details_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            details = {"unparsed": True}
+        timeline.append({"kind": "audit", "at": event.created_at.isoformat() if event.created_at else None, "action": event.action, "actor_user_id": event.actor_user_id, "details": details})
+    for movement in stock_rows:
+        timeline.append({"kind": "inventory", "at": movement.created_at.isoformat() if movement.created_at else None, "action": movement.movement_type.value, "actor_user_id": movement.actor_user_id, "details": {"movement_id": movement.id, "product_id": movement.product_id, "product_name": movement.product.name if movement.product else None, "quantity_delta": movement.quantity_delta, "quantity_before": movement.quantity_before, "quantity_after": movement.quantity_after, "reason": movement.reason}})
+    timeline.sort(key=lambda item: item["at"] or "")
+    return {
+        "order": {"id": order.id, "created_at": order.created_at.isoformat() if order.created_at else None, "updated_at": order.updated_at.isoformat() if order.updated_at else None, "status": order.status.value, "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "notes": order.notes, "token_number": order.token_number, "token_date": order.token_date, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "customer": {"id": order.user.id, "name": order.user.full_name, "email": order.user.email} if order.user else None, "items": [{"product_id": item.product_id, "name": item.product_name, "quantity": item.quantity, "unit_price": str(item.unit_price), "line_total": str(item.line_total)} for item in order.items]},
+        "investigation": {"timeline": timeline, "audit_event_count": len(audit_rows), "inventory_movement_count": len(stock_rows), "payment_evidence": {"payment_status": order.payment_status.value, "gateway_order_id_present": bool(order.gateway_order_id), "gateway_payment_id_present": bool(order.gateway_payment_id), "signature_present": bool(order.payment_signature), "note": "Provider-side payment status must be independently verified in the payment provider dashboard; stored identifiers alone do not prove settlement."}}
+    }
+
 @app.get("/api/admin/dashboard/summary", tags=["administration"], summary="Cross-module admin overview")
 def admin_dashboard_summary(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     """Aggregate operational KPIs for administrators without exposing individual records."""
