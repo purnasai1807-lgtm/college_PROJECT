@@ -235,6 +235,22 @@ class Supplier(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
+class PurchaseOrder(Base):
+    """Supplier purchase order; lines are stored as a validated JSON snapshot."""
+    __tablename__ = "purchase_orders"
+    __table_args__ = (Index("ix_purchase_orders_supplier_id", "supplier_id"), Index("ix_purchase_orders_status", "status"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    lines_json: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    ordered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supplier: Mapped[Supplier] = relationship()
+    created_by: Mapped[User | None] = relationship()
+
 class ProductBatch(Base):
     """Received stock batch with optional expiry date and supplier traceability."""
     __tablename__ = "product_batches"
