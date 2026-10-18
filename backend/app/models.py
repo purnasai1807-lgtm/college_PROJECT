@@ -2,6 +2,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Index, CheckConstraint
+from sqlalchemy.sql import expression
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 import enum
@@ -37,6 +38,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, native_enum=False), default=UserRole.STUDENT, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=expression.false(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
 
@@ -94,10 +96,18 @@ class Order(Base):
     gateway_order_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
     gateway_payment_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
     payment_signature: Mapped[str | None] = mapped_column(String(128))
+    pickup_slot: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)  # stored in UTC; null = as soon as possible
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
     user: Mapped[User] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+
+class AppSetting(Base):
+    """Small key/value store for runtime switches (for example: ordering paused by staff)."""
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 class OrderItem(Base):
     __tablename__ = "order_items"
@@ -262,17 +272,3 @@ class BatchReservation(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-
-
-class PurchaseOrder(Base):
-    """Supplier purchase order; receipt is explicit and idempotent."""
-    __tablename__ = "purchase_orders"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False, index=True)
-    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", index=True)
-    lines_json: Mapped[str] = mapped_column(Text, nullable=False)
-    notes: Mapped[str | None] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    ordered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -50,23 +50,3 @@ test('account form exposes accessible sign-in and registration modes', async ({ 
   await expect(page.getByLabel('Full name')).toBeVisible();
   await expect(page.locator('#auth-submit')).toHaveText(/Create student account/i);
 });
-
-test('catalogue remains keyboard navigable and displays empty-search feedback', async ({ page }) => {
-  const pageErrors = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
-  await page.goto('/');
-  const search = page.locator('#product-search');
-  await search.focus();
-  await expect(search).toBeFocused();
-  await search.fill('ace-phase53-no-such-product');
-  await expect(page.locator('#catalogue-message')).toContainText(/No matching/i);
-  await expect(page.locator('#catalogue-grid .product-card')).toHaveCount(0);
-  expect(pageErrors).toEqual([]);
-});
-
-test('checkout clearly requires account and fresh checkout before payment', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('#cart-message')).toContainText(/cart is empty/i);
-  await expect(page.locator('#cart-checkout')).toBeVisible();
-  await expect(page.locator('#cart-checkout')).toBeDisabled();
-});

@@ -55,7 +55,7 @@ function renderCart(message = '') {
   for (const line of lines) estimated += Number(cached[line.product_id]?.price || 0) * line.quantity;
   subtotal.textContent = money(estimated);
   const checkout = document.querySelector('#cart-checkout'); const review = document.querySelector('#cart-review');
-  if (checkout) checkout.disabled = !lines.length;
+  if (checkout) checkout.disabled = !lines.length || window.aceCanteenClosed === true;
   if (review) review.disabled = !lines.length;
 }
 function addToCart(product) {
@@ -69,7 +69,7 @@ function addToCart(product) {
 async function reviewCart() {
   const lines = cartLines(); if (!lines.length) { renderCart(); return null; }
   if (!window.aceCanteenToken || window.aceCanteenUser?.role !== 'student') throw new Error('Sign in with a student account to review checkout.');
-  const response = await fetch('/api/orders/quote', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: lines, notes: document.querySelector('#checkout-notes')?.value.trim() || null }) });
+  const response = await fetch('/api/orders/quote', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: lines, notes: document.querySelector('#checkout-notes')?.value.trim() || null, pickup_slot: document.querySelector('#pickup-slot')?.value || null }) });
   const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || data.error?.message || 'Could not validate your cart.');
   const list = document.querySelector('#cart-items'); list.replaceChildren();
   for (const item of data.items) {
@@ -99,7 +99,7 @@ async function placeCartOrder() {
   try {
     const quote = await reviewCart();
     if (!quote || !window.confirm(`Continue to secure payment for ${money(quote.subtotal)}?`)) return;
-    const response = await fetch('/api/payments/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: cartLines(), notes: document.querySelector('#checkout-notes')?.value.trim() || null }) });
+    const response = await fetch('/api/payments/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: cartLines(), notes: document.querySelector('#checkout-notes')?.value.trim() || null, pickup_slot: document.querySelector('#pickup-slot')?.value || null }) });
     const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || data.error?.message || 'Could not start payment checkout.');
     const payment = data.payment;
     await new Promise((resolve, reject) => {
@@ -118,7 +118,7 @@ async function placeCartOrder() {
       document.querySelector('#my-orders-section').hidden = false; await loadMyOrders(); await loadCatalogue(); document.querySelector('#my-orders-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   } catch (error) { renderCart(`Checkout: ${error.message}`); }
-  finally { button.disabled = !cartLines().length; button.textContent = original; }
+  finally { button.disabled = !cartLines().length || window.aceCanteenClosed === true; button.textContent = original; }
 }
 document.querySelector('#cart-review')?.addEventListener('click', async () => { const button = document.querySelector('#cart-review'); button.disabled = true; try { await reviewCart(); } catch (error) { renderCart(`Could not review cart: ${error.message}`); } finally { button.disabled = !cartLines().length; } });
 document.querySelector('#cart-checkout')?.addEventListener('click', placeCartOrder);
@@ -223,59 +223,111 @@ if (productSearch && productType) {
   })();
 }
 
-// Phase 3 account UI. Tokens are held in memory only; refreshing requires signing in again.
+// Phase 3/48 account UI: sign in, register, forgot/reset password, persistent session.
+// The bearer token is kept in localStorage so a page refresh (or switching to a UPI app and back on a phone)
+// does not sign the student out. It is validated with /api/auth/me on every page load and removed on sign-out.
 (() => {
   const form = document.querySelector('#auth-form');
   if (!form) return;
-  let mode = 'login';
-  let token = '';
+  const SESSION_KEY = 'ace-canteen-session-v1';
+  const store = {
+    save(value) { try { localStorage.setItem(SESSION_KEY, value); } catch { /* storage disabled: session lasts until refresh */ } },
+    load() { try { return localStorage.getItem(SESSION_KEY) || ''; } catch { return ''; } },
+    clear() { try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ } }
+  };
+  let mode = 'login'; // login | register | forgot | reset
+  let resetToken = '';
   const nameWrap = document.querySelector('#auth-name-wrap');
   const nameInput = document.querySelector('#auth-name');
+  const emailWrap = document.querySelector('#auth-email-wrap');
   const emailInput = document.querySelector('#auth-email');
+  const passwordWrap = document.querySelector('#auth-password-wrap');
+  const passwordLabel = document.querySelector('#auth-password-label');
   const passwordInput = document.querySelector('#auth-password');
+  const forgotButton = document.querySelector('#auth-forgot');
   const submit = document.querySelector('#auth-submit');
   const message = document.querySelector('#auth-message');
   const accountPanel = document.querySelector('#account-panel');
   const setMessage = (text, kind = '') => { message.textContent = text; message.className = `auth-message ${kind}`.trim(); };
-  document.querySelectorAll('[data-auth-mode]').forEach(button => button.addEventListener('click', () => {
-    mode = button.dataset.authMode;
-    document.querySelectorAll('[data-auth-mode]').forEach(b => b.classList.toggle('active', b === button));
+  const labels = {
+    login: { submit: 'Sign in', hint: 'Sign in with your registered email and password.', password: 'Password', auto: 'current-password' },
+    register: { submit: 'Create student account', hint: 'Registration creates a student account.', password: 'Password', auto: 'new-password' },
+    forgot: { submit: 'Email me a reset link', hint: 'Enter your account email and we will send a link to set a new password.', password: 'Password', auto: 'off' },
+    reset: { submit: 'Save new password', hint: 'Choose a new password of at least 12 characters.', password: 'New password (12+ characters)', auto: 'new-password' }
+  };
+  function setMode(next, hint) {
+    mode = next;
+    const label = labels[mode];
+    document.querySelectorAll('[data-auth-mode]').forEach(b => b.classList.toggle('active', b.dataset.authMode === mode));
     nameWrap.hidden = mode !== 'register';
     nameInput.required = mode === 'register';
-    passwordInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
-    submit.textContent = mode === 'register' ? 'Create student account' : 'Sign in';
-    setMessage(mode === 'register' ? 'Registration creates a student account.' : 'Sign in with your registered email and password.');
-  }));
+    emailWrap.hidden = mode === 'reset';
+    emailInput.required = mode !== 'reset';
+    passwordWrap.hidden = mode === 'forgot';
+    passwordInput.required = mode !== 'forgot';
+    passwordInput.autocomplete = label.auto;
+    passwordLabel.textContent = label.password;
+    submit.textContent = label.submit;
+    forgotButton.hidden = mode !== 'login';
+    setMessage(hint ?? label.hint);
+  }
+  document.querySelectorAll('[data-auth-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.authMode)));
+  forgotButton.addEventListener('click', () => setMode('forgot'));
+
+  function applySession(token, user) {
+    window.aceCanteenToken = token;
+    window.aceCanteenUser = user;
+    document.dispatchEvent(new CustomEvent('ace-auth-changed', { detail: user }));
+    document.querySelector('#account-name').textContent = user.full_name;
+    document.querySelector('#account-role').textContent = `Role: ${user.role}`;
+    accountPanel.hidden = false;
+    form.hidden = true;
+    document.querySelectorAll('.auth-tab').forEach(b => b.hidden = true);
+    if (user.must_change_password) {
+      setMessage('Your account uses a temporary password. Change it below before using staff or admin tools.', 'error');
+      document.querySelector('#change-password-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      setMessage('Signed in successfully.', 'success');
+    }
+  }
+  async function readJson(response) { try { return await response.json(); } catch { return {}; } }
+  const postJson = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) });
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
     submit.disabled = true;
     setMessage('Please wait…');
     try {
-      const payload = { email: emailInput.value.trim(), password: passwordInput.value };
-      if (mode === 'register') payload.full_name = nameInput.value.trim();
-      const response = await fetch(`/api/auth/${mode === 'register' ? 'register' : 'login'}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload)
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || data.error?.message || 'Request failed.');
-      if (mode === 'register') {
-        mode = 'login';
-        document.querySelector('[data-auth-mode="login"]').click();
-        emailInput.value = payload.email;
-        passwordInput.value = '';
-        setMessage('Account created. Sign in with your new credentials.', 'success');
+      if (mode === 'forgot') {
+        const response = await postJson('/api/auth/forgot-password', { email: emailInput.value.trim() });
+        const data = await readJson(response);
+        if (!response.ok) throw new Error(data.detail || data.error?.message || 'Could not send the reset email. Try again shortly.');
+        setMessage(data.message, 'success');
         return;
       }
-      token = data.access_token;
-      window.aceCanteenToken = token;
-      window.aceCanteenUser = data.user;
-      document.dispatchEvent(new CustomEvent('ace-auth-changed', { detail: data.user }));
-      document.querySelector('#account-name').textContent = data.user.full_name;
-      document.querySelector('#account-role').textContent = `Role: ${data.user.role}`;
-      accountPanel.hidden = false;
-      form.hidden = true;
-      document.querySelectorAll('.auth-tab').forEach(b => b.hidden = true);
-      setMessage('Signed in successfully.', 'success');
+      if (mode === 'reset') {
+        const response = await postJson('/api/auth/reset-password', { token: resetToken, new_password: passwordInput.value });
+        const data = await readJson(response);
+        if (!response.ok) throw new Error(data.detail || data.error?.message?.replace('The request contains invalid data.', 'Password must be at least 12 characters.') || 'Could not reset the password.');
+        resetToken = ''; passwordInput.value = '';
+        setMode('login', 'Password updated. Sign in with your new password.');
+        message.className = 'auth-message success';
+        return;
+      }
+      const payload = { email: emailInput.value.trim(), password: passwordInput.value };
+      if (mode === 'register') payload.full_name = nameInput.value.trim();
+      const response = await postJson(`/api/auth/${mode === 'register' ? 'register' : 'login'}`, payload);
+      const data = await readJson(response);
+      if (!response.ok) throw new Error(data.detail || data.error?.message || 'Request failed.');
+      if (mode === 'register') {
+        setMode('login', 'Account created. Sign in with your new credentials.');
+        message.className = 'auth-message success';
+        emailInput.value = payload.email;
+        passwordInput.value = '';
+        return;
+      }
+      store.save(data.access_token);
+      applySession(data.access_token, data.user);
     } catch (error) { setMessage(error.message || 'Could not connect to the server.', 'error'); }
     finally { submit.disabled = false; }
   });
@@ -287,22 +339,42 @@ if (productSearch && productType) {
     message.textContent = 'Updating password…'; message.className = 'auth-message';
     try {
       const response = await fetch('/api/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}` }, body: JSON.stringify({ current_password: document.querySelector('#current-password').value, new_password: document.querySelector('#new-password').value }) });
-      const data = await response.json();
+      const data = await readJson(response);
       if (!response.ok) throw new Error(data.detail || 'Could not change password.');
       message.textContent = 'Password changed. Your old session has been signed out; sign in again with your new password.'; message.className = 'auth-message success'; passwordForm.reset(); document.querySelector('#auth-logout').click();
     } catch (error) { message.textContent = error.message; message.className = 'auth-message error'; }
     finally { button.disabled = false; }
   });
   document.querySelector('#auth-logout').addEventListener('click', () => {
-    token = '';
+    store.clear();
     window.aceCanteenToken = '';
     window.aceCanteenUser = null;
     document.dispatchEvent(new CustomEvent('ace-auth-changed', { detail: null }));
     form.reset(); form.hidden = false; accountPanel.hidden = true;
     document.querySelectorAll('.auth-tab').forEach(b => b.hidden = false);
-    document.querySelector('[data-auth-mode="login"]').click();
-    setMessage('You have signed out.', 'success');
+    setMode('login', 'You have signed out.');
+    message.className = 'auth-message success';
   });
+
+  setMode('login');
+  // Password-reset link: /#reset=<token>. The token stays in the URL fragment (never sent to the server or in
+  // Referer headers) and is removed from the address bar immediately.
+  if (location.hash.startsWith('#reset=')) {
+    resetToken = decodeURIComponent(location.hash.slice('#reset='.length));
+    history.replaceState(null, '', location.pathname + location.search);
+    setMode('reset');
+    document.querySelector('#account')?.scrollIntoView({ behavior: 'smooth' });
+  } else {
+    const saved = store.load();
+    if (saved) {
+      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${saved}` } })
+        .then(async response => {
+          if (response.ok) applySession(saved, await response.json());
+          else if (response.status === 401) store.clear(); // expired or invalidated session
+        })
+        .catch(() => { /* offline or server restarting: keep the stored token and let the user retry */ });
+    }
+  }
 })();
 
 
@@ -556,7 +628,7 @@ function orderRow(order, showCustomer = false, workflowStage = "all") {
   const row = document.createElement('div'); row.className = 'managed-product order-row';
   const info = document.createElement('div'); info.className = 'managed-product-name';
   const title = document.createElement('strong'); title.textContent = `Token #${order.token_number ?? '—'} · Order ${order.id} · ${order.status.toUpperCase()}`;
-  const detail = document.createElement('small'); detail.textContent = `${showCustomer ? `${order.customer_name} (${order.customer_email}) · ` : ''}Payment: ${(order.payment_status || 'pending').toUpperCase()} · ${order.items.map(i => `${i.product_name} × ${i.quantity}`).join(', ')} · ₹${Number(order.subtotal).toFixed(2)} · ${new Date(order.created_at).toLocaleString()}`;
+  const detail = document.createElement('small'); detail.textContent = `${showCustomer ? `${order.customer_name} (${order.customer_email}) · ` : ''}Payment: ${(order.payment_status || 'pending').toUpperCase()} · ${order.items.map(i => `${i.product_name} × ${i.quantity}`).join(', ')} · ₹${Number(order.subtotal).toFixed(2)} · ${new Date(order.created_at).toLocaleString()}${order.pickup_slot ? ` · Pickup ${new Date(order.pickup_slot).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
   info.append(title, detail); row.append(info);
   if (!showCustomer && order.payment_status === 'paid' && !['completed', 'cancelled'].includes(order.status)) {
     const tracker = document.createElement('div'); tracker.className = 'order-live-tracker'; tracker.setAttribute('aria-live', 'polite'); tracker.textContent = 'Updating live queue position…'; row.append(tracker);
@@ -953,7 +1025,6 @@ window.setInterval(() => {
           order.status, order.payment_status, `₹${Number(order.subtotal || 0).toFixed(2)}`, order.token_number || '—'
         ];
         for (const value of values) { const td = document.createElement('td'); td.textContent = value; tr.append(td); }
-        const actionCell = document.createElement('td'); const investigate = document.createElement('button'); investigate.type = 'button'; investigate.className = 'secondary-button'; investigate.textContent = 'Investigate'; investigate.addEventListener('click', () => loadOrderInvestigation(order.id)); actionCell.append(investigate); tr.append(actionCell);
         body.append(tr);
       }
       message('admin-orders-message', `${data.returned} order(s) shown. All payment states are included unless filtered.`);
@@ -961,23 +1032,6 @@ window.setInterval(() => {
       $('admin-orders-prev').disabled = page === 0;
       $('admin-orders-next').disabled = data.returned < pageSize;
     } catch (e) { message('admin-orders-message', e.message, true); }
-  }
-  async function loadOrderInvestigation(orderId) {
-    const panel = $('order-investigation-panel'), content = $('order-investigation-content');
-    panel.hidden = false; content.replaceChildren(); message('order-investigation-message', `Loading investigation for order #${orderId}…`);
-    try {
-      const data = await request(`/api/admin/orders/${encodeURIComponent(orderId)}/investigation`), order = data.order, inv = data.investigation;
-      const heading = document.createElement('h4'); heading.textContent = `Order #${order.id} · ${order.status} · payment ${order.payment_status}`; content.append(heading);
-      const customer = document.createElement('p'); customer.textContent = `Customer: ${order.customer?.name || '—'} (${order.customer?.email || '—'}) · Total: ₹${Number(order.subtotal).toFixed(2)} · Pickup token: ${order.token_number ?? '—'}`; content.append(customer);
-      const payment = document.createElement('p'); payment.textContent = `Gateway order: ${order.gateway_order_id || 'not recorded'} · Gateway payment: ${order.gateway_payment_id || 'not recorded'} · Signature stored: ${inv.payment_evidence.signature_present ? 'yes' : 'no'}`; content.append(payment);
-      const note = document.createElement('p'); note.textContent = inv.payment_evidence.note; content.append(note);
-      const itemsTitle = document.createElement('h4'); itemsTitle.textContent = 'Purchased item snapshot'; content.append(itemsTitle);
-      const items = document.createElement('ul'); for (const item of order.items || []) { const li = document.createElement('li'); li.textContent = `${item.name} × ${item.quantity} · ₹${Number(item.unit_price).toFixed(2)} each · ₹${Number(item.line_total).toFixed(2)}`; items.append(li); } content.append(items);
-      const timelineTitle = document.createElement('h4'); timelineTitle.textContent = `Timeline (${inv.timeline.length} events)`; content.append(timelineTitle);
-      const timeline = document.createElement('ol'); for (const event of inv.timeline) { const li = document.createElement('li'); li.textContent = `${event.at || 'Time unavailable'} · ${event.kind} · ${event.action} · ${JSON.stringify(event.details || {})}`; timeline.append(li); } if (!inv.timeline.length) { const li = document.createElement('li'); li.textContent = 'No recorded audit or inventory events for this order.'; timeline.append(li); } content.append(timeline);
-      message('order-investigation-message', `Loaded ${inv.audit_event_count} audit event(s) and ${inv.inventory_movement_count} inventory movement(s).`);
-      panel.scrollIntoView({behavior:'smooth',block:'start'});
-    } catch (e) { message('order-investigation-message', e.message, true); }
   }
   async function loadWebhooks() {
     try {
@@ -994,7 +1048,6 @@ window.setInterval(() => {
     } catch (e) { message('admin-webhook-message', e.message, true); }
   }
   $('admin-refresh-orders').addEventListener('click', () => { page=0; loadSummary(); loadOrders(); });
-  $('close-order-investigation').addEventListener('click', () => { $('order-investigation-panel').hidden = true; });
   ['admin-order-status','admin-payment-status'].forEach(id => $(id).addEventListener('change', () => { page=0; loadOrders(); }));
   $('admin-order-search').addEventListener('input', () => { clearTimeout(debounce); debounce=setTimeout(() => { page=0; loadOrders(); }, 300); });
   $('admin-orders-prev').addEventListener('click', () => { if (page > 0) { page--; loadOrders(); } });
@@ -1013,4 +1066,52 @@ window.setInterval(() => {
   });
   document.addEventListener('ace-auth-changed', adminVisible);
   adminVisible();
+})();
+
+
+// Phase 49: canteen open/closed banner, pickup-time slots, and the staff ordering switch.
+(() => {
+  const $ = id => document.querySelector(id);
+  const banner = $('#canteen-status'), slotWrap = $('#pickup-slot-wrap'), slotSelect = $('#pickup-slot');
+  const controlState = $('#canteen-control-state'), toggle = $('#canteen-toggle'), pauseInput = $('#canteen-pause-message'), controlMessage = $('#canteen-control-message');
+  if (!banner || !slotSelect) return;
+  let current = null;
+  function apply(status, slots) {
+    current = status;
+    window.aceCanteenClosed = !status.accepting_orders;
+    if (!status.accepting_orders) { banner.textContent = status.message; banner.className = 'canteen-status closed'; banner.hidden = false; }
+    else if (status.hours_configured) { banner.textContent = `Open now · ordering hours ${status.open_time}–${status.close_time}`; banner.className = 'canteen-status open'; banner.hidden = false; }
+    else banner.hidden = true;
+    const keep = slotSelect.value;
+    slotSelect.replaceChildren(new Option('As soon as possible', ''));
+    for (const slot of slots) { const option = new Option(slot.remaining > 0 ? slot.label : `${slot.label} (full)`, slot.slot); option.disabled = slot.remaining <= 0; slotSelect.append(option); }
+    if ([...slotSelect.options].some(o => o.value === keep && !o.disabled)) slotSelect.value = keep;
+    slotWrap.hidden = !status.slots_enabled || !slots.length;
+    if (controlState) {
+      controlState.textContent = status.paused ? `Ordering is PAUSED. ${status.message}` : (status.accepting_orders ? 'Ordering is open.' : status.message);
+      toggle.textContent = status.paused ? 'Resume ordering' : 'Pause ordering';
+      pauseInput.hidden = status.paused;
+    }
+    if (typeof renderCart === 'function') renderCart();
+  }
+  async function refresh() {
+    try {
+      const [status, slots] = await Promise.all([fetch('/api/canteen/status').then(r => r.json()), fetch('/api/canteen/slots').then(r => r.json())]);
+      apply(status, slots.slots || []);
+    } catch { /* offline: keep the last known state */ }
+  }
+  toggle?.addEventListener('click', async () => {
+    toggle.disabled = true; controlMessage.textContent = 'Saving…';
+    try {
+      const response = await fetch('/api/admin/canteen/ordering', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}` }, body: JSON.stringify({ paused: !(current && current.paused), message: pauseInput.value.trim() || null }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Could not change ordering state.');
+      controlMessage.textContent = data.paused ? 'Ordering paused. Students see your message.' : 'Ordering resumed.';
+      await refresh();
+    } catch (error) { controlMessage.textContent = error.message; }
+    finally { toggle.disabled = false; }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  window.setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+  refresh();
 })();

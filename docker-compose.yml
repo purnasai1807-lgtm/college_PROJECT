@@ -15,6 +15,17 @@ services:
       retries: 10
     networks: [canteen_internal]
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [canteen_internal]
+
   migrate:
     build: .
     env_file: .env
@@ -40,10 +51,13 @@ services:
       AUTO_CREATE_TABLES: "false"
       SEED_DEMO_DATA: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3).read()"]

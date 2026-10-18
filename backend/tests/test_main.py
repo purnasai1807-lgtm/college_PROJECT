@@ -847,7 +847,7 @@ def test_phase15_info_reports_current_phase():
     with TestClient(app) as client:
         response = client.get('/api/info')
         assert response.status_code == 200
-        assert response.json()['version'] == '0.5.0'
+        assert response.json()['version'] == '0.7.0'
         assert response.json()['phase'].startswith('1-16')
 
 
@@ -861,6 +861,7 @@ def test_phase15_production_configuration_requires_explicit_migration_and_no_dem
         'secret_key': 'a-unique-production-secret-that-is-long-enough-123456',
         'auto_create_tables': False,
         'seed_demo_data': False,
+        'public_base_url': 'https://canteen.example.edu',
     }
     assert Settings(_env_file=None, **common).environment == 'production'
     with pytest.raises(ValidationError):

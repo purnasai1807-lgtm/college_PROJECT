@@ -59,6 +59,7 @@ class UserOut(BaseModel):
     email: EmailStr
     role: UserRole
     is_active: bool
+    must_change_password: bool = False
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -104,6 +105,17 @@ class CategoryUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class CanteenOrderingIn(BaseModel):
+    paused: bool
+    message: str | None = Field(default=None, max_length=200)
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=20, max_length=600)
+    new_password: str = Field(min_length=12, max_length=128)
+
 class ChangePasswordIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=12, max_length=128)
@@ -116,6 +128,7 @@ class OrderItemIn(BaseModel):
 class OrderCreateIn(BaseModel):
     items: list[OrderItemIn] = Field(min_length=1, max_length=30)
     notes: str | None = Field(default=None, max_length=500)
+    pickup_slot: str | None = Field(default=None, max_length=40)
 
 class OrderStatusIn(BaseModel):
     status: str = Field(pattern="^(confirmed|preparing|ready|completed|cancelled)$")
@@ -151,6 +164,7 @@ class OrderItemIn(BaseModel):
 class OrderCreateIn(BaseModel):
     items: list[OrderItemIn] = Field(min_length=1, max_length=30)
     notes: str | None = Field(default=None, max_length=500)
+    pickup_slot: str | None = Field(default=None, max_length=40)
 
 class OrderStatusIn(BaseModel):
     status: str = Field(pattern="^(confirmed|preparing|ready|completed|cancelled)$")

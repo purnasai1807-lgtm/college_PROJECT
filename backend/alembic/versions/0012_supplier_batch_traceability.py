@@ -1,12 +1,16 @@
 """Supplier records and expiry-tracked inventory batches."""
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 revision = "0012_supplier_batch_traceability"
 down_revision = "0011_payment_webhook_idempotency"
 branch_labels = None
 depends_on = None
 
 def upgrade():
+    # 0001 builds tables from the current models, so on a fresh database these already exist.
+    if "suppliers" in inspect(op.get_bind()).get_table_names():
+        return
     op.create_table("suppliers",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("name", sa.String(120), nullable=False),

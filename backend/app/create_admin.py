@@ -14,9 +14,11 @@ parser.add_argument("--email", required=True)
 parser.add_argument("--name", required=True)
 args = parser.parse_args()
 password = getpass("Admin password (minimum 12 characters): ")
-if len(password) < 8:
-    raise SystemExit("Password must contain at least 8 characters. Use a longer password for production.")
-Base.metadata.create_all(bind=engine)
+if len(password) < 12:
+    raise SystemExit("Password must contain at least 12 characters.")
+# Never create tables outside Alembic on a real database; only bootstrap SQLite for local development.
+if engine.dialect.name == "sqlite":
+    Base.metadata.create_all(bind=engine)
 with SessionLocal() as db:
     email = args.email.strip().lower()
     user = db.scalar(select(User).where(User.email == email))
@@ -25,6 +27,8 @@ with SessionLocal() as db:
         user.password_hash = hash_password(password)
         user.role = UserRole.ADMIN
         user.is_active = True
+        user.must_change_password = False
+        user.token_version += 1
     else:
         user = User(full_name=args.name.strip(), email=email, password_hash=hash_password(password), role=UserRole.ADMIN, is_active=True)
         db.add(user)

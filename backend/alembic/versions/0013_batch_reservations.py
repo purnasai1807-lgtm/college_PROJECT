@@ -1,12 +1,15 @@
 """Track inventory batch quantities reserved by each checkout."""
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 revision = "0013_batch_reservations"
 down_revision = "0012_supplier_batch_traceability"
 branch_labels = None
 depends_on = None
 
 def upgrade():
+    if "batch_reservations" in inspect(op.get_bind()).get_table_names():
+        return
     op.create_table(
         "batch_reservations",
         sa.Column("id", sa.Integer(), primary_key=True),

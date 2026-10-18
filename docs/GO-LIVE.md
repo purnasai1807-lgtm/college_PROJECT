@@ -43,24 +43,27 @@ Copy `deploy/nginx-https-example.conf` to `/etc/nginx/sites-available/`, replace
 Fill the `SMTP_*` variables, restart, then use **Forgot your password?** with a real address. Check the spam folder.
 If email is not set up, students cannot recover accounts — the preflight reports this as a warning.
 
-## 6. Real data
+## 6. Hours, slots and pausing
+Set `CANTEEN_OPEN_TIME`, `CANTEEN_CLOSE_TIME` and `CANTEEN_OPEN_DAYS` in `.env` (see `.env.production.example`) to enable opening hours and pickup slots. Staff can pause ordering any time from the **Ordering switch** in the management area. Details: `docs/PHASE49-HOURS-SLOTS-ALERTS.md`.
+
+## 7. Real data
 Replace the demo menu: add real categories and items, prices, photos and stock in the management area.
 `SEED_DEMO_DATA` must stay `false` in production.
 
-## 7. Backups
+## 8. Backups
 ```bash
 ./scripts/backup_db.sh                 # run from cron daily, copy the file OFF the server
 ```
 Restore it once into a scratch database before launch. A backup you have never restored is not a backup.
 
-## 8. Monitoring
+## 9. Monitoring
 Point a free uptime checker (UptimeRobot, Better Stack) at `https://…/api/ready`. Watch `docker compose logs -f app`.
 
-## 9. Pilot (1 week)
+## 10. Pilot (1 week)
 One counter, 10–20 students, the canteen staff. Check: ordering on a phone, payment, token on the pickup board,
 kitchen flow, stock going down, daily report matching Razorpay's settlement. Fix what breaks, then open to everyone.
 
 ## Known limits (be honest with the college)
-- Login throttling and metrics live in process memory, so run **one** app worker (the Dockerfile does).
-- Order updates use 15-second polling, not push.
+- Login throttling is shared through Redis; `/api/metrics` counters are per worker. The image runs one worker by default (`WEB_CONCURRENCY`).
+- Order updates use 15-second polling, plus an email when an order is ready. No SMS/WhatsApp/push yet.
 - No automated test has run against live Razorpay or a real phone yet — the pilot is that test.

@@ -17,7 +17,7 @@ class Check:
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
-def run_checks(env: dict[str, str] | None = None, *, require_payment: bool = False, require_live_payment: bool = False) -> list[Check]:
+def run_checks(env: dict[str, str] | None = None, *, require_payment: bool = False) -> list[Check]:
     e = dict(os.environ if env is None else env)
     production = e.get("ENVIRONMENT", "development").lower() in {"prod", "production"}
     checks: list[Check] = []
@@ -33,42 +33,29 @@ def run_checks(env: dict[str, str] | None = None, *, require_payment: bool = Fal
     if production:
         add("production_migrations", not _truthy(e.get("AUTO_CREATE_TABLES", "true")), "Automatic table creation is disabled for production." if not _truthy(e.get("AUTO_CREATE_TABLES", "true")) else "Set AUTO_CREATE_TABLES=false and run Alembic migrations explicitly.")
         add("production_demo_seed", not _truthy(e.get("SEED_DEMO_DATA", "true")), "Demo seeding is disabled for production." if not _truthy(e.get("SEED_DEMO_DATA", "true")) else "Set SEED_DEMO_DATA=false in production.")
+        base_url = e.get("PUBLIC_BASE_URL", "")
+        add("production_public_url", base_url.startswith("https://"), "PUBLIC_BASE_URL uses https." if base_url.startswith("https://") else "Set PUBLIC_BASE_URL to the public https:// address (used in password-reset emails).")
+        smtp_ok = bool(e.get("SMTP_HOST", "").strip()) and bool((e.get("SMTP_FROM", "") or e.get("SMTP_USERNAME", "")).strip())
+        add("production_email", smtp_ok, "SMTP is configured for password-reset emails." if smtp_ok else "SMTP_HOST and SMTP_FROM are not set: students cannot receive password-reset emails.", "warning")
         url = e.get("DATABASE_URL", "")
         add("production_database", url.startswith(("postgresql://", "postgresql+psycopg://")), "PostgreSQL URL configured." if url.startswith(("postgresql://", "postgresql+psycopg://")) else "Production DATABASE_URL must use PostgreSQL.")
-        add("production_https_proxy", _truthy(e.get("HTTPS_TERMINATED", "false")), "HTTPS termination explicitly acknowledged." if _truthy(e.get("HTTPS_TERMINATED", "false")) else "Configure and verify HTTPS at the reverse proxy/load balancer, then set HTTPS_TERMINATED=true.")
+        add("production_https_proxy", _truthy(e.get("HTTPS_TERMINATED", "false")), "HTTPS termination explicitly acknowledged." if _truthy(e.get("HTTPS_TERMINATED", "false")) else "Set HTTPS_TERMINATED=true only after configuring and verifying HTTPS at the reverse proxy/load balancer.", "warning")
         add("production_debug_docs", e.get("EXPOSE_API_DOCS", "false").lower() not in {"1", "true", "yes", "on"}, "Interactive API documentation is not requested." if e.get("EXPOSE_API_DOCS", "false").lower() not in {"1", "true", "yes", "on"} else "Do not expose interactive API docs publicly.")
     else:
         add("demo_seed", True, "Development/test mode: demo seeding may be enabled.", "info")
     key_id, key_secret = e.get("RAZORPAY_KEY_ID", "").strip(), e.get("RAZORPAY_KEY_SECRET", "").strip()
     add("payment_credentials_pair", bool(key_id) == bool(key_secret), "Razorpay key ID and secret are either both configured or both empty." if bool(key_id) == bool(key_secret) else "Configure both Razorpay key ID and secret, or leave both empty.")
-    webhook_secret = e.get("RAZORPAY_WEBHOOK_SECRET", "").strip()
-    payment_configured = bool(key_id and key_secret and webhook_secret)
-    payment_partial = bool(key_id or key_secret or webhook_secret) and not payment_configured
-    add("payment_webhook_configuration", not payment_partial,
-        "Razorpay key ID, key secret and webhook secret are all configured, or all are empty." if not payment_partial else
-        "Configure the Razorpay key ID, key secret and webhook secret together, or leave all three empty.")
-    if production and not payment_configured:
-        add("production_payment_readiness", False,
-            "Live payment checkout is not ready. Configure provider credentials in the deployment secret manager and verify them in staging before accepting payments.", "warning")
-    if require_payment or require_live_payment:
-        add("payment_credentials_required", payment_configured,
-            "Razorpay keys and webhook secret are present." if payment_configured else
-            "Payment was requested as required, but credentials/webhook secret are incomplete.")
-    if require_live_payment:
-        is_live_key = key_id.startswith("rzp_live_")
-        add("live_payment_key_mode", is_live_key,
-            "Razorpay key ID uses live mode." if is_live_key else
-            "Live payment readiness requires a Razorpay live-mode key ID (rzp_live_...). Never paste credentials into source code or chat.")
+    if require_payment:
+        add("payment_credentials_required", bool(key_id and key_secret and e.get("RAZORPAY_WEBHOOK_SECRET", "").strip()), "Payment keys and webhook secret are present." if key_id and key_secret and e.get("RAZORPAY_WEBHOOK_SECRET", "").strip() else "Payment was requested as required, but credentials/webhook secret are incomplete.")
     add("postgres_password", not production or len(e.get("POSTGRES_PASSWORD", "")) >= 24 and e.get("POSTGRES_PASSWORD", "") not in {"change-this-postgres-password-before-deployment", "postgres", "password"}, "Production database password meets the minimum length check." if not production or (len(e.get("POSTGRES_PASSWORD", "")) >= 24 and e.get("POSTGRES_PASSWORD", "") not in {"change-this-postgres-password-before-deployment", "postgres", "password"}) else "Set POSTGRES_PASSWORD to a unique value of at least 24 characters.")
     return checks
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
-    parser.add_argument("--require-payment", action="store_true", help="Fail if Razorpay credentials and webhook secret are not configured")
-    parser.add_argument("--require-live-payment", action="store_true", help="Also require a Razorpay live-mode key ID; use only for final live-launch checks")
+    parser.add_argument("--require-payment", action="store_true", help="Fail if Razorpay credentials are not configured")
     args = parser.parse_args(argv)
-    checks = run_checks(require_payment=args.require_payment, require_live_payment=args.require_live_payment)
+    checks = run_checks(require_payment=args.require_payment)
     failures = [c for c in checks if not c.ok and c.severity == "error"]
     warnings = [c for c in checks if not c.ok and c.severity == "warning"]
     if args.json:

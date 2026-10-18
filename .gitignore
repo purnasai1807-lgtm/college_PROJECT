@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+.env.production
+*.db
+*.zip
+node_modules/
 backend/.env
 backend/ace_canteen.db
 backend/ace_canteen.db-*

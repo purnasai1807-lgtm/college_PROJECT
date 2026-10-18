@@ -217,3 +217,7 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 .admin-pagination { display:flex; justify-content:center; align-items:center; gap:1rem; padding:1rem 0; }
 .admin-webhook-heading { margin-top:2rem; }
 @media(max-width:760px) { .admin-order-toolbar { grid-template-columns:1fr; } .admin-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.link-button{justify-self:start;border:0;background:none;padding:4px 0;color:#2b7451;font:inherit;font-weight:650;text-decoration:underline;cursor:pointer}.link-button:hover{color:#12372a}.link-button[hidden],#auth-form [hidden]{display:none!important}
+
+.canteen-status{margin:0 0 14px;padding:10px 14px;border-radius:10px;font-weight:650;font-size:.92rem}.canteen-status.open{background:#e6f4ec;color:#187044}.canteen-status.closed{background:#fdecea;color:#b42318}.canteen-status[hidden]{display:none}#pickup-slot{width:100%;padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit;background:#fff}.canteen-control{display:grid;gap:12px;margin-bottom:18px}.canteen-control label{display:grid;gap:6px;font-weight:650}.canteen-control input{padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit}

@@ -1,3 +1,14 @@
+# ACE Canteen
+
+Campus food and stationery ordering: student accounts, catalogue, cart, Razorpay payments, pickup tokens and queue, kitchen/staff boards, inventory with batches and expiry, admin reports, audit trail, notifications, installable web app.
+
+**Start here:** run it locally with the Quick start below; deploy it with [`docs/GO-LIVE.md`](docs/GO-LIVE.md); latest changes are in [`docs/PHASE48-ACCOUNT-RECOVERY.md`](docs/PHASE48-ACCOUNT-RECOVERY.md).
+
+## Phase 49 — hours, pickup slots, pause switch, ready emails
+Canteen opening hours with a staff **Ordering switch**, bookable pickup time slots, an email when an order is ready, and Redis-backed shared login throttling. See [`docs/PHASE49-HOURS-SLOTS-ALERTS.md`](docs/PHASE49-HOURS-SLOTS-ALERTS.md). Apply migration `0015_canteen_hours_slots`.
+
+## Phase 48 — account recovery and deployment fixes
+Password reset by email, forced change of temporary staff passwords, sessions that survive a page refresh, and a fix for migrating a brand-new database. Apply migration `0014_must_change_password`.
 
 ## Phase 24 — production deployment preflight
 
@@ -96,7 +107,7 @@ The admin control centre now includes:
 - `GET /api/admin/orders/export.csv`: bounded CSV export of order records, optionally filtered by order/payment status. It excludes credentials and payment signatures.
 - `GET /api/admin/payments/webhook-events`: paginated view of received webhook event IDs/names/timestamps for reconciliation.
 
-All three endpoints require the administrator role. They are backend APIs; a polished dedicated frontend page for these additional panels is a separate remaining UI task. Payment states must still be confirmed by the payment provider flow, not manually edited by an administrator.
+All three endpoints require the administrator role. The admin control centre page in the web UI uses them. Payment states must still be confirmed by the payment provider flow, not manually edited by an administrator.
 
 
 ## Phase 46 — Admin governance
@@ -114,31 +125,3 @@ See `docs/PHASE46-ADMIN-GOVERNANCE.md` for last-active-admin safeguards and audi
 ### Phase 47 verification
 
 From `clg/backend`, run `pytest -q`. The Phase 47 suite adds tests for staff creation, duplicate emails, forbidden student creation through the staff endpoint, role authorization, password length validation, audit recording, and session invalidation after role changes.
-
-## Phase 48 — Order investigation dossier
-
-Administrators can use **Investigate** from the all-orders register to open a complete per-order dossier. The admin-only endpoint `GET /api/admin/orders/{order_id}/investigation` returns the historical item/price snapshot, customer and pickup details, order/payment state and gateway identifiers, plus a chronological timeline assembled from order audit events and inventory movements. It includes an explicit caution that stored gateway identifiers are not proof of settlement; verify payment with the provider dashboard. Staff and students cannot access this endpoint. No refund functionality is provided.
-
-Run the complete test suite from the `clg` project root:
-
-```powershell
-$env:PYTHONPATH = "backend"
-python -m pytest -q
-```
-
-Phase 48 adds four order-investigation tests. Current full suite: 98 passed.
-
-## Latest release: Phases 49–53
-See `PHASE49-53-RELEASE-NOTES.md` for payment reconciliation, purchase order receiving, browser acceptance coverage, production readiness gates, and student UX notes. Purchase orders use Alembic migration `0014_purchase_orders`; run the normal migration step before using an existing database. Admin payment reconciliation is diagnostic only and does not mutate payment status or issue refunds.
-
-## Phase 54 — Production verification & reliability
-
-Phase 54 strengthens the release gate rather than pretending external services have been tested. Production preflight now blocks when HTTPS termination is not explicitly verified and rejects partial Razorpay configuration. Use `python scripts/deployment_preflight.py --require-live-payment --json` only after configuring the live provider credentials in the deployment secret manager. This checks configuration shape and the `rzp_live_` key prefix; it does not contact Razorpay or validate settlement.
-
-Run the local automated release checks from the project root:
-
-```powershell
-python scripts/release_gate.py
-```
-
-This runs the backend suite, Python compilation and frontend JavaScript syntax checks. For Playwright, run `npm ci`, `npx playwright install chromium`, then `python scripts/release_gate.py --browser`. See `docs/PHASE54-PRODUCTION-VERIFICATION.md` for deployment steps and external checks still required. Live payment, cloud deployment, concurrency/load behavior and off-host backup restoration remain unverified until performed in the target environment.

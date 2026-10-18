@@ -1,5 +1,5 @@
 "use strict";
-const CACHE_NAME = "ace-canteen-shell-v2";
+const CACHE_NAME = "ace-canteen-shell-v4";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/css/style.css", "/js/app.js", "/assets/ace-logo.png", "/assets/canteen-hero.png"];
 const PRIVATE_OR_API_PATH = url => url.pathname === "/api" || url.pathname.startsWith("/api/") || url.pathname === "/docs" || url.pathname.startsWith("/docs/") || url.pathname === "/openapi.json" || url.pathname.startsWith("/auth/");
 

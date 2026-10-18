@@ -55,6 +55,8 @@
         <p class="management-message" id="cart-message" role="status" aria-live="polite">Your cart is empty. Add items from the catalogue above.</p>
         <div id="cart-items" class="cart-items"></div>
         <div class="cart-summary"><span>Estimated subtotal</span><strong id="cart-subtotal">₹0.00</strong></div>
+        <p class="canteen-status" id="canteen-status" role="status" aria-live="polite" hidden></p>
+        <label class="cart-notes-label" for="pickup-slot" id="pickup-slot-wrap" hidden>Pickup time<select id="pickup-slot"><option value="">As soon as possible</option></select></label>
         <label class="cart-notes-label" for="checkout-notes">Order notes (optional)<textarea id="checkout-notes" maxlength="500" rows="3" placeholder="Any useful pickup or preparation note (max 500 characters)"></textarea></label>
         <div class="cart-actions"><button type="button" class="secondary-button" id="cart-review">Review total</button><button type="button" class="primary-button" id="cart-checkout">Pay & place order</button></div>
         <p class="cart-disclaimer">Payments are verified by the server. Use Razorpay test keys to test checkout; live payments require live keys and a configured webhook.</p>
@@ -80,6 +82,13 @@
 
     <section class="admin-section" id="catalogue-management" hidden>
       <div class="section-heading"><p class="eyebrow">STAFF & ADMIN</p><h2>Catalogue management.</h2><p>Staff can add and update products. Administrators can also create categories. Changes are saved to the database.</p></div>
+      <div class="management-card canteen-control" id="canteen-control">
+        <h3>Ordering switch</h3>
+        <p id="canteen-control-state">Checking…</p>
+        <label>Message shown to students while paused (optional)<input id="canteen-pause-message" maxlength="200" placeholder="e.g. Rush hour – back at 1:00 pm"></label>
+        <button type="button" class="primary-button" id="canteen-toggle">Pause ordering</button>
+        <p class="management-message" id="canteen-control-message" role="status" aria-live="polite"></p>
+      </div>
       <div class="phase10-workflow" id="staff-workflow-dashboard">
         <div class="section-heading workflow-heading"><p class="eyebrow">PHASE 10 · STAFF OPERATIONS</p><h2>Kitchen & pickup counter.</h2><p>Use the kitchen board to accept and prepare paid orders. Use the counter board to mark ready orders as collected. Boards refresh automatically.</p></div>
         <div class="queue-summary-grid workflow-summary" aria-live="polite">
@@ -162,8 +171,7 @@
           <button type="button" class="secondary-button" id="admin-export-orders">Export CSV</button>
         </div>
         <p id="admin-orders-message" role="status" aria-live="polite"></p>
-        <div class="table-scroll"><table class="admin-orders-table"><thead><tr><th>Order</th><th>Customer</th><th>Created</th><th>Order status</th><th>Payment</th><th>Amount</th><th>Pickup</th><th>Investigation</th></tr></thead><tbody id="admin-orders-body"></tbody></table></div>
-        <div class="management-card" id="order-investigation-panel" hidden><div class="management-list-head"><h3>Order investigation dossier</h3><button type="button" class="secondary-button" id="close-order-investigation">Close dossier</button></div><p class="management-message" id="order-investigation-message" role="status"></p><div id="order-investigation-content"></div></div>
+        <div class="table-scroll"><table class="admin-orders-table"><thead><tr><th>Order</th><th>Customer</th><th>Created</th><th>Order status</th><th>Payment</th><th>Amount</th><th>Pickup</th></tr></thead><tbody id="admin-orders-body"></tbody></table></div>
         <div class="admin-pagination"><button type="button" class="secondary-button" id="admin-orders-prev">Previous</button><span id="admin-orders-page">Page 1</span><button type="button" class="secondary-button" id="admin-orders-next">Next</button></div>
         <div class="section-heading admin-webhook-heading"><h3>Payment webhook event ledger</h3><p>Event metadata for payment troubleshooting; sensitive signatures are not displayed.</p></div>
         <button type="button" class="secondary-button" id="admin-refresh-webhooks">Refresh webhook events</button>
@@ -176,9 +184,10 @@
         <div class="auth-tabs"><button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button><button type="button" class="auth-tab" data-auth-mode="register">Create account</button></div>
         <form id="auth-form">
           <label id="auth-name-wrap" hidden>Full name<input id="auth-name" autocomplete="name" minlength="2" maxlength="120" placeholder="Your full name"></label>
-          <label>Email address<input id="auth-email" type="email" autocomplete="email" required placeholder="you@college.edu"></label>
-          <label>Password<input id="auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="At least 12 characters"></label>
+          <label id="auth-email-wrap">Email address<input id="auth-email" type="email" autocomplete="email" required placeholder="you@college.edu"></label>
+          <label id="auth-password-wrap"><span id="auth-password-label">Password</span><input id="auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="At least 12 characters"></label>
           <button class="primary-button auth-submit" type="submit" id="auth-submit">Sign in</button>
+          <button type="button" class="link-button" id="auth-forgot">Forgot your password?</button>
         </form>
         <p id="auth-message" class="auth-message" role="status" aria-live="polite">You are not signed in.</p>
         <div id="account-panel" class="account-panel" hidden><strong id="account-name"></strong><span id="account-role"></span><section class="notification-center" id="notification-center" aria-labelledby="notification-heading"><div class="management-list-head"><h3 id="notification-heading">Notifications <span class="notification-count" id="notification-unread-count">0 unread</span></h3><button type="button" class="secondary-button" id="notifications-mark-all">Mark all read</button></div><p class="management-message" id="notification-message" role="status" aria-live="polite">Your updates will appear here.</p><div id="notification-list" class="notification-list"></div></section><form id="change-password-form" class="password-change-form"><label>Current password<input id="current-password" type="password" required autocomplete="current-password"></label><label>New password (12+ characters)<input id="new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit" class="secondary-button">Change password</button><p id="password-change-message" class="auth-message" role="status"></p></form><button type="button" class="secondary-button" id="auth-logout">Sign out</button></div>

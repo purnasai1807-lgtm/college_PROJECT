@@ -15,7 +15,7 @@ from threading import Lock
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -28,8 +28,9 @@ from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
 from app import models  # noqa: F401 - registers ORM models with Base.metadata
 from app.models import Category, Product, User, UserRole, Order, OrderItem, OrderStatus, PaymentStatus, InventoryMovement, InventoryMovementType, AuditEvent, Notification, Favorite, OrderReview, PaymentWebhookEvent
-from app.schemas import CategoryOut, ProductOut, ProductCreate, RegisterIn, LoginIn, UserOut, TokenOut, RoleUpdateIn, CategoryCreate, ProductUpdate, CategoryUpdate, ChangePasswordIn, AdminUserCreateIn, OrderCreateIn, OrderOut, OrderStatusIn, StockAdjustmentIn, StockThresholdUpdate
-from app.security import hash_password, verify_password, create_access_token, get_current_user, require_roles
+from app.schemas import CategoryOut, ProductOut, ProductCreate, RegisterIn, LoginIn, UserOut, TokenOut, RoleUpdateIn, CategoryCreate, ProductUpdate, CategoryUpdate, ChangePasswordIn, ForgotPasswordIn, ResetPasswordIn, AdminUserCreateIn, OrderCreateIn, OrderOut, OrderStatusIn, StockAdjustmentIn, StockThresholdUpdate
+from app.security import hash_password, verify_password, create_access_token, get_current_user, require_roles, create_password_reset_token, read_password_reset_token
+from app.emailer import send_email
 from app.seed import seed_demo_data
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -79,6 +80,16 @@ def _notify_canteen_managers(db: Session, notification_type: str, title: str, me
     for manager in managers:
         _create_notification(db, manager.id, notification_type, title, message, entity_type, entity_id)
 
+_redis = None  # tests may inject a fake client here
+
+def _get_redis():
+    """Return a Redis client when REDIS_URL is set, else None (in-memory throttling is used)."""
+    global _redis
+    if _redis is None and settings.redis_url:
+        import redis
+        _redis = redis.Redis.from_url(settings.redis_url, socket_timeout=1, socket_connect_timeout=1, decode_responses=True)
+    return _redis
+
 def _login_rate_key(request: Request, email: str) -> str:
     client_ip = request.client.host if request.client else "unknown"
     return f"{client_ip}:{email.strip().lower()}"
@@ -95,6 +106,16 @@ def _prune_login_attempts(now: float) -> None:
         _login_attempts.pop(key, None)
 
 def _check_login_rate(key: str) -> int:
+    shared = _get_redis()
+    if shared is not None:
+        try:
+            count = shared.get("rl:" + key)
+            if count is not None and int(count) >= _LOGIN_LIMIT:
+                ttl = shared.ttl("rl:" + key)
+                return max(1, ttl if ttl and ttl > 0 else _LOGIN_WINDOW_SECONDS)
+            return 0
+        except Exception:
+            logger.warning("Redis unavailable for rate limiting; using per-process memory", exc_info=True)
     now = time.monotonic()
     with _login_attempts_lock:
         # Prune periodically, not on every request, to keep normal login checks cheap.
@@ -113,6 +134,14 @@ def _check_login_rate(key: str) -> int:
     return 0
 
 def _record_failed_login(key: str) -> None:
+    shared = _get_redis()
+    if shared is not None:
+        try:
+            if shared.incr("rl:" + key) == 1:
+                shared.expire("rl:" + key, _LOGIN_WINDOW_SECONDS)
+            return
+        except Exception:
+            logger.warning("Redis unavailable for rate limiting; using per-process memory", exc_info=True)
     now = time.monotonic()
     with _login_attempts_lock:
         if len(_login_attempts) > 1024:
@@ -123,6 +152,12 @@ def _record_failed_login(key: str) -> None:
         attempts.append(now)
 
 def _clear_login_failures(key: str) -> None:
+    shared = _get_redis()
+    if shared is not None:
+        try:
+            shared.delete("rl:" + key)
+        except Exception:
+            logger.warning("Redis unavailable for rate limiting", exc_info=True)
     with _login_attempts_lock:
         _login_attempts.pop(key, None)
 
@@ -260,7 +295,7 @@ async def metrics(request: Request) -> JSONResponse:
 
 @app.get("/api/info", tags=["system"])
 async def info() -> dict[str, str]:
-    return {"name": settings.app_name, "version": settings.app_version, "phase": "1-16 database foundation, accounts, catalogue, payments, orders, inventory, reporting and notifications; Phases 17-24 feedback, payment idempotency, CI, PWA, backup recovery, operations monitoring and deployment hardening; Phase 25 aggregate operational metrics and request tracing", "backend": "Python / FastAPI", "frontend": "HTML / CSS / JavaScript", "database": "SQLAlchemy; SQLite by default, PostgreSQL supported"}
+    return {"name": settings.app_name, "version": settings.app_version, "phase": "1-16 database foundation, accounts, catalogue, payments, orders, inventory, reporting and notifications; Phases 17-24 feedback, payment idempotency, CI, PWA, backup recovery, operations monitoring and deployment hardening; Phase 25 aggregate operational metrics and request tracing; Phases 26-47 operations, procurement, batches, admin governance and staff accounts; Phase 48 password reset, forced password change and persistent sessions", "backend": "Python / FastAPI", "frontend": "HTML / CSS / JavaScript", "database": "SQLAlchemy; SQLite by default, PostgreSQL supported"}
 
 @app.get("/api/categories", response_model=list[CategoryOut], tags=["catalogue"])
 def list_categories(item_type: str | None = Query(default=None, pattern="^(food|stationery)$"), db: Session = Depends(get_db)):
@@ -372,6 +407,43 @@ def mark_all_notifications_read(user: User = Depends(get_current_user), db: Sess
     db.commit()
     return {"marked_read": len(rows)}
 
+@app.post("/api/auth/forgot-password", tags=["authentication"], summary="Request a password-reset email")
+def forgot_password(payload: ForgotPasswordIn, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
+    email = str(payload.email).strip().lower()
+    rate_key = "reset:" + _login_rate_key(request, email)
+    retry_after = _check_login_rate(rate_key)
+    if retry_after:
+        raise HTTPException(status_code=429, detail="Too many reset requests. Try again later.", headers={"Retry-After": str(retry_after)})
+    _record_failed_login(rate_key)  # every request counts toward the limit
+    generic = {"message": "If an account exists for that email, a password-reset link has been sent. The link expires soon and can be used once."}
+    user = db.scalar(select(User).where(func.lower(User.email) == email))
+    if user is None or not user.is_active:
+        return generic  # identical response: do not reveal which emails are registered
+    link = f"{settings.public_base_url.rstrip('/')}/#reset={create_password_reset_token(user)}"
+    body = (f"Hello {user.full_name},\n\nUse this link to set a new ACE Canteen password:\n{link}\n\n"
+            f"The link works once and expires in {settings.password_reset_minutes} minutes. "
+            "If you did not request this, you can ignore this email; your password will not change.\n")
+    background.add_task(send_email, user.email, "Reset your ACE Canteen password", body)
+    return generic
+
+@app.post("/api/auth/reset-password", tags=["authentication"], summary="Set a new password using an emailed reset token")
+def reset_password(payload: ResetPasswordIn, request: Request, db: Session = Depends(get_db)):
+    rate_key = "resettoken:" + _login_rate_key(request, "token")
+    retry_after = _check_login_rate(rate_key)
+    if retry_after:
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.", headers={"Retry-After": str(retry_after)})
+    user = read_password_reset_token(payload.token, db)
+    if user is None:
+        _record_failed_login(rate_key)
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Request a new one.")
+    user.password_hash = hash_password(payload.new_password)
+    user.token_version += 1
+    user.must_change_password = False
+    _record_audit(db, "user.password_reset", "user", user.id, user.id, {})
+    db.commit()
+    _clear_login_failures(rate_key)
+    return {"message": "Password updated. Sign in with your new password."}
+
 @app.post("/api/auth/change-password", tags=["authentication"])
 def change_password(payload: ChangePasswordIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not verify_password(payload.current_password, user.password_hash):
@@ -380,6 +452,7 @@ def change_password(payload: ChangePasswordIn, user: User = Depends(get_current_
         raise HTTPException(status_code=400, detail="New password must differ from the current password")
     user.password_hash = hash_password(payload.new_password)
     user.token_version += 1
+    user.must_change_password = False
     db.commit()
     return {"message": "Password changed. All existing sessions have been signed out; sign in again."}
 
@@ -395,7 +468,7 @@ def create_managed_user(payload: AdminUserCreateIn, admin: User = Depends(requir
     # This endpoint is for managed staff accounts; student registration remains public.
     if payload.role == UserRole.STUDENT:
         raise HTTPException(status_code=422, detail="Use student registration for student accounts")
-    user = User(full_name=payload.full_name.strip(), email=email, password_hash=hash_password(payload.temporary_password), role=payload.role, is_active=True)
+    user = User(full_name=payload.full_name.strip(), email=email, password_hash=hash_password(payload.temporary_password), role=payload.role, is_active=True, must_change_password=True)
     db.add(user)
     db.flush()
     _record_audit(db, "user.created_by_admin", "user", user.id, admin.id, {"role": payload.role.value, "email": email})
@@ -706,11 +779,118 @@ def staff_dashboard(user: User = Depends(require_roles("staff", "admin")), db: S
 
 
 # Phase 5–7: checkout, payment-gated order lifecycle, daily pickup tokens, and staff/admin queue.
+from zoneinfo import ZoneInfo
+from datetime import time as _time_of_day, timezone as _tz
+from app.models import AppSetting
+from app.schemas import CanteenOrderingIn
+
+def _canteen_tz() -> ZoneInfo:
+    return ZoneInfo(settings.canteen_timezone)
+
+def _hours_configured() -> bool:
+    return bool(settings.canteen_open_time and settings.canteen_close_time)
+
+def _open_days() -> set[int]:
+    return {int(x) for x in settings.canteen_open_days.split(",") if x.strip()}
+
+def _get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.get(AppSetting, key)
+    return row.value if row else default
+
+def _set_setting(db: Session, key: str, value: str) -> None:
+    row = db.get(AppSetting, key)
+    if row is None:
+        db.add(AppSetting(key=key, value=value))
+    else:
+        row.value = value
+
+def _canteen_status(db: Session) -> dict[str, Any]:
+    paused = _get_setting(db, "ordering_paused", "0") == "1"
+    pause_message = _get_setting(db, "pause_message", "")
+    now = datetime.now(_canteen_tz())
+    within_hours = True
+    if _hours_configured():
+        within_hours = now.weekday() in _open_days() and _time_of_day.fromisoformat(settings.canteen_open_time) <= now.time() < _time_of_day.fromisoformat(settings.canteen_close_time)
+    if paused:
+        reason = pause_message or "Ordering is temporarily paused by the canteen."
+    elif not within_hours:
+        reason = f"The canteen is closed. Ordering hours: {settings.canteen_open_time}–{settings.canteen_close_time}."
+    else:
+        reason = ""
+    return {"accepting_orders": not paused and within_hours, "paused": paused, "message": reason, "hours_configured": _hours_configured(),
+            "open_time": settings.canteen_open_time or None, "close_time": settings.canteen_close_time or None,
+            "timezone": settings.canteen_timezone, "slots_enabled": _hours_configured()}
+
+def _assert_ordering_open(db: Session) -> None:
+    status = _canteen_status(db)
+    if not status["accepting_orders"]:
+        raise HTTPException(status_code=409, detail=status["message"])
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=_tz.utc) if value.tzinfo is None else value.astimezone(_tz.utc)
+
+def _slot_options(db: Session) -> list[dict[str, Any]]:
+    """Pickup slots still bookable today, with remaining capacity. Empty when hours are not configured."""
+    if not _hours_configured():
+        return []
+    tz = _canteen_tz()
+    now = datetime.now(tz)
+    if now.weekday() not in _open_days():
+        return []
+    open_dt = datetime.combine(now.date(), _time_of_day.fromisoformat(settings.canteen_open_time), tzinfo=tz)
+    close_dt = datetime.combine(now.date(), _time_of_day.fromisoformat(settings.canteen_close_time), tzinfo=tz)
+    step = timedelta(minutes=settings.pickup_slot_minutes)
+    earliest = max(open_dt, now + timedelta(minutes=settings.pickup_min_lead_minutes))
+    steps_needed = max(0, -(-int((earliest - open_dt).total_seconds()) // int(step.total_seconds())))
+    slot = open_dt + step * steps_needed
+    slots: list[datetime] = []
+    while slot < close_dt:
+        slots.append(slot)
+        slot += step
+    if not slots:
+        return []
+    rows = db.execute(select(Order.pickup_slot, func.count(Order.id)).where(Order.pickup_slot.is_not(None), Order.pickup_slot >= slots[0].astimezone(_tz.utc), Order.pickup_slot <= slots[-1].astimezone(_tz.utc), Order.status != OrderStatus.CANCELLED, Order.payment_status != PaymentStatus.FAILED).group_by(Order.pickup_slot)).all()
+    used = {_as_utc(r[0]): r[1] for r in rows}
+    return [{"slot": s.isoformat(), "label": s.strftime("%H:%M"), "remaining": max(0, settings.pickup_slot_capacity - used.get(s.astimezone(_tz.utc), 0)), "_utc": s.astimezone(_tz.utc)} for s in slots]
+
+def _resolve_pickup_slot(db: Session, raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        requested = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid pickup time")
+    if requested.tzinfo is None:
+        raise HTTPException(status_code=422, detail="Invalid pickup time")
+    requested = requested.astimezone(_tz.utc)
+    option = next((o for o in _slot_options(db) if o["_utc"] == requested), None)
+    if option is None:
+        raise HTTPException(status_code=409, detail="That pickup time is no longer available. Choose another time or pick up as soon as possible.")
+    if option["remaining"] <= 0:
+        raise HTTPException(status_code=409, detail="That pickup time is full. Choose another time.")
+    return requested
+
+@app.get("/api/canteen/status", tags=["canteen"], summary="Is the canteen accepting orders right now?")
+def canteen_status(db: Session = Depends(get_db)):
+    return _canteen_status(db)
+
+@app.get("/api/canteen/slots", tags=["canteen"], summary="Pickup time slots still available today")
+def canteen_slots(db: Session = Depends(get_db)):
+    return {"slots": [{k: v for k, v in o.items() if k != "_utc"} for o in _slot_options(db)], "capacity_per_slot": settings.pickup_slot_capacity, "slot_minutes": settings.pickup_slot_minutes}
+
+@app.patch("/api/admin/canteen/ordering", tags=["canteen"], summary="Pause or resume ordering (rush hour, sold out, closing early)")
+def set_ordering_paused(payload: CanteenOrderingIn, staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
+    _set_setting(db, "ordering_paused", "1" if payload.paused else "0")
+    _set_setting(db, "pause_message", (payload.message or "").strip()[:200] if payload.paused else "")
+    _record_audit(db, "canteen.ordering_paused" if payload.paused else "canteen.ordering_resumed", "canteen", "ordering", staff.id, {"message": payload.message})
+    db.commit()
+    return _canteen_status(db)
+
 def _order_payload(order: Order) -> dict[str, Any]:
     return {
         "id": order.id, "user_id": order.user_id, "token_number": order.token_number,
         "token_date": order.token_date, "status": order.status.value,
-        "payment_status": order.payment_status.value, "subtotal": str(order.subtotal),
+        "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "pickup_slot": _as_utc(order.pickup_slot).isoformat() if order.pickup_slot else None,
         "notes": order.notes, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "created_at": order.created_at, "updated_at": order.updated_at,
         "items": [{"id": item.id, "product_id": item.product_id, "product_name": item.product_name,
                    "unit_price": str(item.unit_price), "quantity": item.quantity, "line_total": str(item.line_total)}
@@ -721,6 +901,8 @@ def _order_payload(order: Order) -> dict[str, Any]:
 def quote_order(payload: OrderCreateIn, user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
     """Validate a cart and return server-priced totals without reserving stock."""
     from decimal import Decimal
+    _assert_ordering_open(db)
+    _resolve_pickup_slot(db, payload.pickup_slot)
     quantities: dict[int, int] = {}
     for line in payload.items:
         quantities[line.product_id] = quantities.get(line.product_id, 0) + line.quantity
@@ -774,6 +956,8 @@ def create_payment_order(payload: OrderCreateIn, user: User = Depends(require_ro
     import httpx
     if not settings.razorpay_key_id or not settings.razorpay_key_secret:
         raise HTTPException(status_code=503, detail="Online payments are not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env.")
+    _assert_ordering_open(db)
+    pickup_slot = _resolve_pickup_slot(db, payload.pickup_slot)
     _release_expired_payment_reservations(db)
     quantities: dict[int, int] = {}
     for line in payload.items:
@@ -802,7 +986,7 @@ def create_payment_order(payload: OrderCreateIn, user: User = Depends(require_ro
         raise HTTPException(status_code=502, detail="Payment provider could not create the checkout. No order was placed; please retry.")
     today = datetime.now().date().isoformat()
     last_token = db.scalar(select(func.max(Order.token_number)).where(Order.token_date == today)) or 0
-    order = Order(user_id=user.id, token_number=last_token + 1, token_date=today, status=OrderStatus.PENDING, payment_status=PaymentStatus.PENDING, subtotal=subtotal, notes=payload.notes, gateway_order_id=gateway_order["id"])
+    order = Order(user_id=user.id, token_number=last_token + 1, token_date=today, status=OrderStatus.PENDING, payment_status=PaymentStatus.PENDING, subtotal=subtotal, notes=payload.notes, pickup_slot=pickup_slot, gateway_order_id=gateway_order["id"])
     try:
         db.add(order)
         db.flush()
@@ -1145,29 +1329,6 @@ def admin_all_orders(
         result.append(data)
     return {"items": result, "limit": limit, "offset": offset, "returned": len(result)}
 
-@app.get("/api/admin/orders/{order_id}/investigation", tags=["admin order verification"], summary="Complete order investigation dossier")
-def admin_order_investigation(order_id: int, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
-    """Admin-only order dossier: immutable purchase snapshot, payment identifiers, audit history and stock movements."""
-    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items), joinedload(Order.user)))
-    if order is None:
-        raise HTTPException(status_code=404, detail="Order not found")
-    audit_rows = db.scalars(select(AuditEvent).where(AuditEvent.entity_type == "order", AuditEvent.entity_id == str(order.id)).order_by(AuditEvent.created_at.asc()).limit(500)).all()
-    stock_rows = db.scalars(select(InventoryMovement).where(InventoryMovement.order_id == order.id).options(joinedload(InventoryMovement.product), joinedload(InventoryMovement.actor)).order_by(InventoryMovement.created_at.asc()).limit(500)).all()
-    timeline = []
-    for event in audit_rows:
-        try:
-            details = json.loads(event.details_json or "{}")
-        except (TypeError, json.JSONDecodeError):
-            details = {"unparsed": True}
-        timeline.append({"kind": "audit", "at": event.created_at.isoformat() if event.created_at else None, "action": event.action, "actor_user_id": event.actor_user_id, "details": details})
-    for movement in stock_rows:
-        timeline.append({"kind": "inventory", "at": movement.created_at.isoformat() if movement.created_at else None, "action": movement.movement_type.value, "actor_user_id": movement.actor_user_id, "details": {"movement_id": movement.id, "product_id": movement.product_id, "product_name": movement.product.name if movement.product else None, "quantity_delta": movement.quantity_delta, "quantity_before": movement.quantity_before, "quantity_after": movement.quantity_after, "reason": movement.reason}})
-    timeline.sort(key=lambda item: item["at"] or "")
-    return {
-        "order": {"id": order.id, "created_at": order.created_at.isoformat() if order.created_at else None, "updated_at": order.updated_at.isoformat() if order.updated_at else None, "status": order.status.value, "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "notes": order.notes, "token_number": order.token_number, "token_date": order.token_date, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "customer": {"id": order.user.id, "name": order.user.full_name, "email": order.user.email} if order.user else None, "items": [{"product_id": item.product_id, "name": item.product_name, "quantity": item.quantity, "unit_price": str(item.unit_price), "line_total": str(item.line_total)} for item in order.items]},
-        "investigation": {"timeline": timeline, "audit_event_count": len(audit_rows), "inventory_movement_count": len(stock_rows), "payment_evidence": {"payment_status": order.payment_status.value, "gateway_order_id_present": bool(order.gateway_order_id), "gateway_payment_id_present": bool(order.gateway_payment_id), "signature_present": bool(order.payment_signature), "note": "Provider-side payment status must be independently verified in the payment provider dashboard; stored identifiers alone do not prove settlement."}}
-    }
-
 @app.get("/api/admin/dashboard/summary", tags=["administration"], summary="Cross-module admin overview")
 def admin_dashboard_summary(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     """Aggregate operational KPIs for administrators without exposing individual records."""
@@ -1215,7 +1376,7 @@ def admin_payment_webhook_events(
     return {"items": [{"id": event.id, "event_id": event.event_id, "event_name": event.event_name, "received_at": event.received_at.isoformat()} for event in events], "limit": limit, "offset": offset, "returned": len(events)}
 
 @app.patch("/api/admin/orders/{order_id}/status", tags=["order queue"])
-def update_order_status(order_id: int, payload: OrderStatusIn, staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
+def update_order_status(order_id: int, payload: OrderStatusIn, background: BackgroundTasks, staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
     order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items)))
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -1253,12 +1414,16 @@ def update_order_status(order_id: int, payload: OrderStatusIn, staff: User = Dep
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Could not update order status")
+    if target == OrderStatus.READY and settings.email_order_ready:
+        customer = db.get(User, order.user_id)
+        if customer is not None and customer.is_active:
+            background.add_task(send_email, customer.email, f"Your ACE Canteen order #{order.id} is ready", f"Hello {customer.full_name},\n\nYour order is ready for pickup. Show token #{order.token_number or '-'} at the counter.\n\nACE Canteen\n")
     return _order_payload(order)
 
 # Phase 26-37 operational release: supplier traceability, batch expiry, and demand insights.
 from pydantic import BaseModel, Field
 from datetime import date as _date
-from app.models import Supplier, ProductBatch, BatchReservation, PurchaseOrder
+from app.models import Supplier, ProductBatch, BatchReservation
 
 def _reserve_batch_stock(db: Session, product_id: int, quantity: int, order_id: int) -> None:
     """Consume available non-expired batches in FEFO order and retain allocations.
@@ -1378,85 +1543,3 @@ def demand_analytics(days: int = Query(default=30, ge=7, le=180), limit: int = Q
     since = datetime.now() - timedelta(days=days)
     rows = db.execute(select(OrderItem.product_id, OrderItem.product_name, func.sum(OrderItem.quantity).label("units"), func.count(func.distinct(OrderItem.order_id)).label("orders")).join(Order, Order.id == OrderItem.order_id).where(Order.payment_status == PaymentStatus.PAID, Order.created_at >= since).group_by(OrderItem.product_id, OrderItem.product_name).order_by(func.sum(OrderItem.quantity).desc()).limit(limit)).all()
     return {"window_days": days, "generated_at": datetime.now().isoformat(), "method": "historical paid-order average; excludes seasonality and stockouts", "products": [{"product_id": int(r.product_id), "product_name": r.product_name, "units_sold": int(r.units or 0), "orders": int(r.orders or 0), "average_units_per_day": round(float(r.units or 0) / days, 2), "suggested_reorder_units": max(0, round(float(r.units or 0) / days * 3))} for r in rows]}
-
-
-# Phase 49: safe payment reconciliation. This endpoint reports exceptions; it never
-# marks an order paid or failed based on age alone and never triggers refunds.
-@app.get("/api/admin/payments/reconciliation", tags=["admin payment verification"])
-def payment_reconciliation(older_than_minutes: int = Query(default=15, ge=1, le=10080), limit: int = Query(default=200, ge=1, le=1000), _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
-    cutoff = datetime.now().astimezone() - timedelta(minutes=older_than_minutes)
-    rows = db.scalars(select(Order).options(joinedload(Order.user)).where(
-        Order.payment_status.in_([PaymentStatus.PENDING, PaymentStatus.FAILED])
-    ).order_by(Order.created_at.asc()).limit(limit)).unique().all()
-    items = []
-    for order in rows:
-        created = order.created_at
-        age_minutes = max(0, int((datetime.now().astimezone() - (created if created.tzinfo else created.astimezone())).total_seconds() // 60)) if created else 0
-        if age_minutes < older_than_minutes and order.payment_status != PaymentStatus.FAILED:
-            continue
-        items.append({"order_id": order.id, "customer_email": order.user.email if order.user else None, "order_status": order.status.value, "payment_status": order.payment_status.value, "amount": str(order.subtotal), "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "age_minutes": age_minutes, "recommended_action": "verify_with_provider_before_manual_change" if order.payment_status == PaymentStatus.PENDING else "review_provider_failure_and_stock_release"})
-    return {"generated_at": datetime.now().astimezone().isoformat(), "older_than_minutes": older_than_minutes, "items": items, "count": len(items), "safety_note": "Diagnostic only: confirm provider state before changing payment records. No automatic capture, status mutation, or refund is performed."}
-
-# Phase 50: purchase orders, supplier workflow, and safe stock receipt.
-class PurchaseOrderLineIn(BaseModel):
-    product_id: int = Field(gt=0)
-    quantity: int = Field(gt=0, le=100000)
-    unit_cost: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
-    expiry_date: _date | None = None
-
-class PurchaseOrderCreateIn(BaseModel):
-    supplier_id: int = Field(gt=0)
-    lines: list[PurchaseOrderLineIn] = Field(min_length=1, max_length=100)
-    notes: str | None = Field(default=None, max_length=500)
-
-@app.post("/api/admin/purchase-orders", status_code=201, tags=["procurement"])
-def create_purchase_order(payload: PurchaseOrderCreateIn, admin: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
-    supplier = db.get(Supplier, payload.supplier_id)
-    if supplier is None or not supplier.is_active:
-        raise HTTPException(status_code=404, detail="Active supplier not found")
-    lines = []
-    for line in payload.lines:
-        product = db.get(Product, line.product_id)
-        if product is None or product.is_archived:
-            raise HTTPException(status_code=404, detail=f"Active product {line.product_id} not found")
-        if line.expiry_date and line.expiry_date < _date.today():
-            raise HTTPException(status_code=422, detail="Purchase line expiry date cannot be in the past")
-        lines.append({"product_id": product.id, "product_name": product.name, "quantity": line.quantity, "unit_cost": str(line.unit_cost), "expiry_date": line.expiry_date.isoformat() if line.expiry_date else None})
-    po = PurchaseOrder(supplier_id=supplier.id, created_by_user_id=admin.id, status="ordered", lines_json=json.dumps(lines), notes=payload.notes, ordered_at=datetime.now().astimezone())
-    db.add(po); db.flush()
-    _record_audit(db, "procurement.purchase_order_created", "purchase_order", po.id, admin.id, {"supplier_id": supplier.id, "line_count": len(lines)})
-    db.commit(); db.refresh(po)
-    return _purchase_order_payload(po, supplier.name)
-
-def _purchase_order_payload(po: PurchaseOrder, supplier_name: str | None = None):
-    return {"id": po.id, "supplier_id": po.supplier_id, "supplier_name": supplier_name, "status": po.status, "lines": json.loads(po.lines_json), "notes": po.notes, "created_at": po.created_at.isoformat() if po.created_at else None, "ordered_at": po.ordered_at.isoformat() if po.ordered_at else None, "received_at": po.received_at.isoformat() if po.received_at else None}
-
-@app.get("/api/admin/purchase-orders", tags=["procurement"])
-def list_purchase_orders(status: str | None = Query(default=None, pattern="^(ordered|received)$"), limit: int = Query(default=100, ge=1, le=500), _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
-    stmt = select(PurchaseOrder).order_by(PurchaseOrder.created_at.desc()).limit(limit)
-    if status: stmt = stmt.where(PurchaseOrder.status == status)
-    rows = db.scalars(stmt).all()
-    return [_purchase_order_payload(po, (db.get(Supplier, po.supplier_id).name if db.get(Supplier, po.supplier_id) else None)) for po in rows]
-
-@app.post("/api/admin/purchase-orders/{purchase_order_id}/receive", tags=["procurement"])
-def receive_purchase_order(purchase_order_id: int, staff: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
-    po = db.scalar(select(PurchaseOrder).where(PurchaseOrder.id == purchase_order_id).with_for_update())
-    if po is None: raise HTTPException(status_code=404, detail="Purchase order not found")
-    if po.status == "received": return {"purchase_order": _purchase_order_payload(po), "already_received": True}
-    if po.status != "ordered": raise HTTPException(status_code=409, detail="Only ordered purchase orders can be received")
-    lines = json.loads(po.lines_json)
-    for line in lines:
-        product = db.scalar(select(Product).where(Product.id == line["product_id"]).options(joinedload(Product.category)).with_for_update())
-        if product is None or product.is_archived: raise HTTPException(status_code=409, detail="A purchase order product is no longer active")
-        expiry = _date.fromisoformat(line["expiry_date"]) if line.get("expiry_date") else None
-        if expiry and expiry < _date.today(): raise HTTPException(status_code=409, detail="Cannot receive expired purchase stock")
-        quantity = int(line["quantity"]); before = product.stock_quantity
-        product.stock_quantity += quantity
-        product.is_available = bool(product.category.is_active and product.stock_quantity > 0)
-        db.add(ProductBatch(product_id=product.id, supplier_id=po.supplier_id, batch_code=f"PO-{po.id}-P{product.id}-{uuid.uuid4().hex[:6]}", quantity_received=quantity, quantity_remaining=quantity, unit_cost=Decimal(line["unit_cost"]), received_date=_date.today(), expiry_date=expiry, notes=f"Received from purchase order {po.id}", created_by_user_id=staff.id))
-        _record_stock_movement(db, product, quantity, InventoryMovementType.RECEIPT, f"Purchase order {po.id} received", actor_user_id=staff.id, before=before)
-    po.status = "received"; po.received_at = datetime.now().astimezone()
-    _record_audit(db, "procurement.purchase_order_received", "purchase_order", po.id, staff.id, {"line_count": len(lines)})
-    db.commit(); db.refresh(po)
-    supplier = db.get(Supplier, po.supplier_id)
-    return {"purchase_order": _purchase_order_payload(po, supplier.name if supplier else None), "already_received": False}
