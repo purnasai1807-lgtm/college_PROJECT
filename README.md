@@ -125,4 +125,3 @@ See `docs/PHASE46-ADMIN-GOVERNANCE.md` for last-active-admin safeguards and audi
 ### Phase 47 verification
 
 From `clg/backend`, run `pytest -q`. The Phase 47 suite adds tests for staff creation, duplicate emails, forbidden student creation through the staff endpoint, role authorization, password length validation, audit recording, and session invalidation after role changes.
-"# s" 
