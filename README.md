@@ -130,3 +130,15 @@ Phase 48 adds four order-investigation tests. Current full suite: 98 passed.
 
 ## Latest release: Phases 49–53
 See `PHASE49-53-RELEASE-NOTES.md` for payment reconciliation, purchase order receiving, browser acceptance coverage, production readiness gates, and student UX notes. Purchase orders use Alembic migration `0014_purchase_orders`; run the normal migration step before using an existing database. Admin payment reconciliation is diagnostic only and does not mutate payment status or issue refunds.
+
+## Phase 54 — Production verification & reliability
+
+Phase 54 strengthens the release gate rather than pretending external services have been tested. Production preflight now blocks when HTTPS termination is not explicitly verified and rejects partial Razorpay configuration. Use `python scripts/deployment_preflight.py --require-live-payment --json` only after configuring the live provider credentials in the deployment secret manager. This checks configuration shape and the `rzp_live_` key prefix; it does not contact Razorpay or validate settlement.
+
+Run the local automated release checks from the project root:
+
+```powershell
+python scripts/release_gate.py
+```
+
+This runs the backend suite, Python compilation and frontend JavaScript syntax checks. For Playwright, run `npm ci`, `npx playwright install chromium`, then `python scripts/release_gate.py --browser`. See `docs/PHASE54-PRODUCTION-VERIFICATION.md` for deployment steps and external checks still required. Live payment, cloud deployment, concurrency/load behavior and off-host backup restoration remain unverified until performed in the target environment.
