@@ -1,0 +1,35 @@
+APP_NAME=ACE Canteen
+APP_VERSION=0.6.0
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+# Works without installing PostgreSQL. For production, replace with your PostgreSQL URL:
+# DATABASE_URL=postgresql+psycopg://username:password@localhost:5432/ace_canteen
+DATABASE_URL=sqlite:///./backend/ace_canteen.db
+AUTO_CREATE_TABLES=true
+SEED_DEMO_DATA=true
+# Replace with a long, random secret before deployment.
+SECRET_KEY=change-this-development-secret-before-deployment
+ACCESS_TOKEN_MINUTES=720
+
+# Razorpay TEST keys first; payment remains disabled until configured. Never commit real keys.
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
+PAYMENT_CURRENCY=INR
+
+# Docker Compose PostgreSQL settings (use a long random password for deployment).
+POSTGRES_DB=ace_canteen
+POSTGRES_USER=ace_canteen
+POSTGRES_PASSWORD=change-this-postgres-password-before-deployment
+APP_PORT=8000
+
+# --- Password reset email (SMTP). Optional in development: the reset link is printed in the server log. ---
+# In production set these so students can recover their accounts.
+PUBLIC_BASE_URL=http://127.0.0.1:8000
+PASSWORD_RESET_MINUTES=30
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=
+SMTP_USE_SSL=false
