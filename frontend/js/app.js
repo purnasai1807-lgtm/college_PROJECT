@@ -478,6 +478,17 @@ if (productSearch && productType) {
   document.querySelector('#refresh-products')?.addEventListener('click', loadManagedProducts);
   document.querySelector('#refresh-categories')?.addEventListener('click', loadManagedCategories);
   document.querySelector('#refresh-users')?.addEventListener('click', loadManagedUsers);
+  document.querySelector('#staff-account-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget; const button = form.querySelector('button[type=submit]');
+    const message = document.querySelector('#staff-account-message'); button.disabled = true; setMessage(message, 'Creating account…');
+    try {
+      const data = { full_name: document.querySelector('#staff-full-name').value.trim(), email: document.querySelector('#staff-email').value.trim(), role: document.querySelector('#staff-role').value, temporary_password: document.querySelector('#staff-temporary-password').value };
+      const account = await api('/api/admin/users', { method: 'POST', body: JSON.stringify(data) });
+      form.reset(); setMessage(message, `${account.role} account created for ${account.email}. The password is not displayed again.`, 'success'); await loadManagedUsers();
+    } catch (error) { setMessage(message, error.message, 'error'); }
+    finally { button.disabled = false; }
+  });
   productForm?.addEventListener('submit', async event => {
     event.preventDefault();
     const message = document.querySelector('#product-form-message');

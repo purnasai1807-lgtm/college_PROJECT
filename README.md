@@ -102,3 +102,15 @@ All three endpoints require the administrator role. They are backend APIs; a pol
 ## Phase 46 — Admin governance
 
 See `docs/PHASE46-ADMIN-GOVERNANCE.md` for last-active-admin safeguards and audit-event investigation filters.
+
+## Phase 47 — Staff accounts and permissions
+
+- Admins can create staff or additional administrator accounts from **Staff & permissions** in the management area.
+- Managed accounts require a unique email and a temporary password of at least 12 characters. The temporary password is not returned by the API or shown again after submission; share it securely and ask the recipient to change it after signing in.
+- Only administrators can create accounts or change roles/activation. Student accounts continue to use public registration.
+- Role and activation changes increment the account token version, invalidating existing bearer tokens. The last-active-administrator safeguards remain in force.
+- Staff creation, role changes, and activation changes are recorded in the admin audit trail. No refund feature is included.
+
+### Phase 47 verification
+
+From `clg/backend`, run `pytest -q`. The Phase 47 suite adds tests for staff creation, duplicate emails, forbidden student creation through the staff endpoint, role authorization, password length validation, audit recording, and session invalidation after role changes.

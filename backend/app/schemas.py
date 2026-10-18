@@ -71,6 +71,12 @@ class TokenOut(BaseModel):
 class RoleUpdateIn(BaseModel):
     role: UserRole
 
+class AdminUserCreateIn(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    role: UserRole = UserRole.STAFF
+    temporary_password: str = Field(min_length=12, max_length=128)
+
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     slug: str = Field(min_length=2, max_length=90, pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$")

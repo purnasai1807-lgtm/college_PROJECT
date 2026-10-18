@@ -28,7 +28,7 @@ from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
 from app import models  # noqa: F401 - registers ORM models with Base.metadata
 from app.models import Category, Product, User, UserRole, Order, OrderItem, OrderStatus, PaymentStatus, InventoryMovement, InventoryMovementType, AuditEvent, Notification, Favorite, OrderReview, PaymentWebhookEvent
-from app.schemas import CategoryOut, ProductOut, ProductCreate, RegisterIn, LoginIn, UserOut, TokenOut, RoleUpdateIn, CategoryCreate, ProductUpdate, CategoryUpdate, ChangePasswordIn, OrderCreateIn, OrderOut, OrderStatusIn, StockAdjustmentIn, StockThresholdUpdate
+from app.schemas import CategoryOut, ProductOut, ProductCreate, RegisterIn, LoginIn, UserOut, TokenOut, RoleUpdateIn, CategoryCreate, ProductUpdate, CategoryUpdate, ChangePasswordIn, AdminUserCreateIn, OrderCreateIn, OrderOut, OrderStatusIn, StockAdjustmentIn, StockThresholdUpdate
 from app.security import hash_password, verify_password, create_access_token, get_current_user, require_roles
 from app.seed import seed_demo_data
 
@@ -387,6 +387,22 @@ def change_password(payload: ChangePasswordIn, user: User = Depends(get_current_
 def list_users(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     return db.scalars(select(User).order_by(User.created_at.desc())).all()
 
+@app.post("/api/admin/users", response_model=UserOut, status_code=201, tags=["administration"], summary="Create a staff or admin account")
+def create_managed_user(payload: AdminUserCreateIn, admin: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    email = str(payload.email).strip().lower()
+    if db.scalar(select(User.id).where(func.lower(User.email) == email)) is not None:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    # This endpoint is for managed staff accounts; student registration remains public.
+    if payload.role == UserRole.STUDENT:
+        raise HTTPException(status_code=422, detail="Use student registration for student accounts")
+    user = User(full_name=payload.full_name.strip(), email=email, password_hash=hash_password(payload.temporary_password), role=payload.role, is_active=True)
+    db.add(user)
+    db.flush()
+    _record_audit(db, "user.created_by_admin", "user", user.id, admin.id, {"role": payload.role.value, "email": email})
+    db.commit()
+    db.refresh(user)
+    return user
+
 @app.patch("/api/admin/users/{user_id}/role", response_model=UserOut, tags=["administration"])
 def update_user_role(user_id: int, payload: RoleUpdateIn, admin: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     user = db.get(User, user_id)
@@ -399,6 +415,8 @@ def update_user_role(user_id: int, payload: RoleUpdateIn, admin: User = Depends(
         if other_admins == 0:
             raise HTTPException(status_code=409, detail="Cannot demote the last active administrator. Promote another active account first.")
     old_role = user.role.value
+    if user.role != payload.role:
+        user.token_version += 1
     user.role = payload.role
     _record_audit(db, "user.role_changed", "user", user.id, admin.id, {"old_role": old_role, "new_role": payload.role.value})
     db.commit()
@@ -417,6 +435,8 @@ def set_user_active(user_id: int, active: bool = Query(...), admin: User = Depen
         if other_admins == 0:
             raise HTTPException(status_code=409, detail="Cannot disable the last active administrator. Activate another administrator first.")
     old_active = user.is_active
+    if old_active != active:
+        user.token_version += 1
     user.is_active = active
     _record_audit(db, "user.activation_changed", "user", user.id, admin.id, {"old_active": old_active, "new_active": active})
     db.commit()
