@@ -49,7 +49,7 @@ def test_payment_status_only_allows_retry_after_explicit_failed_attempt(monkeypa
         product_id, batch_id = product.id, batch.id
 
     try:
-        monkeypatch.setattr("httpx.post", lambda *args, **kwargs: FakeGatewayResponse({"id": gateway_order_id, "amount": 2500, "currency": "INR"}))
+        monkeypatch.setattr("httpx.post", lambda *args, **kwargs: FakeGatewayResponse({"id": gateway_order_id, "amount": 1250, "currency": "INR"}))
         monkeypatch.setattr("httpx.get", lambda *args, **kwargs: FakeGatewayResponse(provider_items))
         with TestClient(app) as client:
             registered = client.post("/api/auth/register", json={"full_name": "Phase 57 Student", "email": email, "password": "safe-test-password-123"})
@@ -57,9 +57,19 @@ def test_payment_status_only_allows_retry_after_explicit_failed_attempt(monkeypa
             logged_in = client.post("/api/auth/login", json={"email": email, "password": "safe-test-password-123"})
             assert logged_in.status_code == 200, logged_in.text
             headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
-            created = client.post("/api/payments/create-order", headers=headers, json={"items": [{"product_id": product_id, "quantity": 1}]})
+            checkout_headers = {**headers, "Idempotency-Key": f"phase57-{suffix}"}
+            checkout_payload = {"items": [{"product_id": product_id, "quantity": 1}]}
+            created = client.post("/api/payments/create-order", headers=checkout_headers, json=checkout_payload)
             assert created.status_code == 201, created.text
             order_id = created.json()["order"]["id"]
+            # A network retry of the same checkout returns the same order and never calls Razorpay twice.
+            replay = client.post("/api/payments/create-order", headers=checkout_headers, json=checkout_payload)
+            assert replay.status_code == 201, replay.text
+            assert replay.headers.get("Idempotency-Replayed") == "true"
+            assert replay.json()["order"]["id"] == order_id
+            changed_payload = {"items": [{"product_id": product_id, "quantity": 2}]}
+            mismatch = client.post("/api/payments/create-order", headers=checkout_headers, json=changed_payload)
+            assert mismatch.status_code == 409
 
             # A capture webhook missing its currency is not accepted as proof of payment.
             webhook_body = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": {
@@ -131,6 +141,8 @@ def test_payment_status_only_allows_retry_after_explicit_failed_attempt(monkeypa
             batch = db.get(ProductBatch, batch_id)
             product = db.get(Product, product_id)
             user = db.scalar(select(User).where(User.email == email))
+            if user:
+                db.query(__import__("app.models", fromlist=["CheckoutIdempotency"]).CheckoutIdempotency).filter_by(user_id=user.id).delete(synchronize_session=False)
             db.query(InventoryMovement).filter(InventoryMovement.product_id == product_id).delete(synchronize_session=False)
             if batch:
                 db.delete(batch)

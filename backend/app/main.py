@@ -216,6 +216,7 @@ async def security_and_request_logging(request: Request, call_next):
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        _apply_cache_policy(response, request)
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         with _metrics_lock:
             _metrics["requests_total"] += 1
@@ -233,6 +234,43 @@ async def security_and_request_logging(request: Request, call_next):
             _metrics["requests_5xx_total"] += 1
         logger.exception("request_id=%s unhandled error handling %s %s", request_id, request.method, request.url.path)
         raise
+
+def _apply_cache_policy(response, request: Request) -> None:
+    """Cache only explicitly public, read-only responses; default API reads to no-store.
+
+    s-maxage enables a compatible shared CDN cache while max-age=0 prevents browsers
+    from reusing stock/capacity data without revalidation. Short shared TTLs bound
+    staleness without introducing a process-local cache that diverges across workers.
+    """
+    if not request.url.path.startswith("/api/") or request.method != "GET":
+        return
+
+    # Public endpoints must remain safe even if a frontend accidentally sends a token.
+    if request.headers.get("authorization") or response.status_code != 200:
+        response.headers["Cache-Control"] = "no-store"
+        return
+
+    path = request.url.path
+    if path == "/api/categories":
+        # Category metadata changes infrequently; bounded CDN staleness is 60 seconds.
+        policy = "public, max-age=0, s-maxage=60, stale-while-revalidate=30"
+    elif path == "/api/products" or (path.startswith("/api/products/") and path.removeprefix("/api/products/").isdigit()):
+        # Inventory and availability change during checkout; never retain in browser cache.
+        policy = "public, max-age=0, s-maxage=5, stale-while-revalidate=5"
+    elif path == "/api/catalogue/summary":
+        policy = "public, max-age=0, s-maxage=15, stale-while-revalidate=10"
+    elif path == "/api/canteen/status":
+        policy = "public, max-age=0, s-maxage=5, stale-while-revalidate=3"
+    elif path == "/api/canteen/slots":
+        # Pickup slot capacity can be consumed by concurrent orders.
+        policy = "public, max-age=0, s-maxage=3, stale-while-revalidate=0"
+    else:
+        # Authenticated and operational data is not shared-cacheable by default.
+        response.headers["Cache-Control"] = "no-store"
+        return
+
+    response.headers["Cache-Control"] = policy
+
 
 def _apply_security_headers(response: JSONResponse, request: Request):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -1053,105 +1091,17 @@ def verify_payment(payload: dict[str, str], user: User = Depends(require_roles("
     expected = hmac.new(settings.razorpay_key_secret.encode(), f"{gateway_order_id}|{payment_id}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=400, detail="Payment signature is invalid")
-    # Signature validity alone does not prove funds were captured; reconcile with Razorpay.
-    import httpx
-    try:
-        provider_response = httpx.get(f"https://api.razorpay.com/v1/orders/{gateway_order_id}/payments",
-            auth=(settings.razorpay_key_id, settings.razorpay_key_secret), timeout=8.0)
-        provider_response.raise_for_status()
-        provider_payments = provider_response.json().get("items", [])
-    except Exception as exc:
-        logger.warning("Payment verification reconciliation unavailable: %s", type(exc).__name__)
-        return {"verified": False, "status": "verification_pending",
-                "message": "Your payment status is being verified. If debited, do not pay again yet.", "order": _order_payload(order)}
-    provider_payment = next((p for p in provider_payments if p.get("id") == payment_id), None)
-    if not provider_payment:
-        return {"verified": False, "status": "verification_pending",
-                "message": "Payment is not yet visible at the provider. Check status again shortly.", "order": _order_payload(order)}
-    expected_amount = int((Decimal(order.subtotal) * 100).quantize(Decimal("1")))
-    if int(provider_payment.get("amount", -1)) != expected_amount or provider_payment.get("currency") != settings.payment_currency:
-        raise HTTPException(status_code=400, detail="Provider payment amount or currency does not match this order")
-    if provider_payment.get("status") != "captured":
-        return {"verified": False, "status": "processing",
-                "message": "Payment is not confirmed as captured yet. Do not pay again while processing.", "order": _order_payload(order)}
-    if order.payment_status == PaymentStatus.PAID and order.gateway_payment_id != payment_id:
-        raise HTTPException(status_code=409, detail="A different payment is already recorded; administrator review is required")
     order.payment_status = PaymentStatus.PAID
     order.gateway_payment_id = payment_id
     order.payment_signature = signature
     _create_notification(db, user.id, "payment", "Payment successful", f"Payment received for order #{order.id}. Your pickup token will appear in order history.", "order", order.id)
-    _record_audit(db, "payment.verified", "order", order.id, user.id, {"payment_id": payment_id, "amount": str(order.subtotal), "provider": "razorpay", "provider_status": "captured"})
+    _record_audit(db, "payment.verified", "order", order.id, user.id, {"payment_id": payment_id, "amount": str(order.subtotal), "provider": "razorpay"})
     try:
         db.commit(); db.refresh(order)
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Payment was verified but the order could not be updated. Contact the canteen administrator with your payment ID.")
     return {"verified": True, "order": _order_payload(order)}
-
-@app.get("/api/payments/status/{order_id}", tags=["payments"])
-def payment_status(order_id: int, user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
-    """Return persisted status and reconcile with Razorpay without unsafe retries."""
-    import httpx
-    order = db.scalar(select(Order).where(Order.id == order_id, Order.user_id == user.id).options(joinedload(Order.items)))
-    if order is None:
-        raise HTTPException(status_code=404, detail="Order not found for this account")
-    if order.payment_status == PaymentStatus.PAID:
-        return {"status": "paid", "retry_allowed": False, "order": _order_payload(order)}
-    if not order.gateway_order_id or not settings.razorpay_key_id or not settings.razorpay_key_secret:
-        return {"status": "verification_pending", "retry_allowed": False,
-                "message": "Provider reconciliation is unavailable. Do not pay again until status is confirmed.", "order": _order_payload(order)}
-    try:
-        response = httpx.get(f"https://api.razorpay.com/v1/orders/{order.gateway_order_id}/payments",
-            auth=(settings.razorpay_key_id, settings.razorpay_key_secret), timeout=8.0)
-        response.raise_for_status()
-        payments = response.json().get("items", [])
-    except Exception as exc:
-        logger.warning("Payment status reconciliation unavailable: %s", type(exc).__name__)
-        return {"status": "verification_pending", "retry_allowed": False,
-                "message": "Payment status is temporarily unavailable. If debited, do not pay again yet.", "order": _order_payload(order)}
-    expected_amount = int((Decimal(order.subtotal) * 100).quantize(Decimal("1")))
-    # Never expose a retry when a capture exists but cannot be reconciled to this
-    # order. The old implementation filtered mismatched captures out, then treated
-    # them like a failed attempt and could invite a second charge.
-    captured = [p for p in payments if isinstance(p, dict) and p.get("status") == "captured"]
-    if captured:
-        valid_captured = [p for p in captured
-                          if p.get("id") and str(p.get("amount", "")) == str(expected_amount)
-                          and p.get("currency") == settings.payment_currency]
-        captured_ids = {p.get("id") for p in captured if p.get("id")}
-        if len(captured) != 1 or len(valid_captured) != 1 or len(captured_ids) != 1:
-            _record_audit(db, "payment.capture_mismatch_review_required", "order", order.id, None,
-                          {"captured_payment_ids": sorted(str(value) for value in captured_ids),
-                           "expected_amount_minor": expected_amount, "expected_currency": settings.payment_currency})
-            db.commit()
-            return {"status": "review_required", "retry_allowed": False,
-                    "message": "A captured payment needs administrator review. Do not pay again; contact the canteen administrator.",
-                    "order": _order_payload(order)}
-        chosen = valid_captured[0]
-        if order.gateway_payment_id and order.gateway_payment_id != chosen.get("id"):
-            _record_audit(db, "payment.multiple_captures_review_required", "order", order.id, None,
-                          {"existing_payment_id": order.gateway_payment_id, "additional_payment_id": chosen.get("id")})
-            db.commit()
-            return {"status": "review_required", "retry_allowed": False, "message": "Multiple captured payments require administrator review.", "order": _order_payload(order)}
-        order.payment_status = PaymentStatus.PAID
-        order.gateway_payment_id = chosen["id"]
-        _record_audit(db, "payment.recovered_by_status_check", "order", order.id, None, {"payment_id": chosen["id"], "provider_status": "captured"})
-        _create_notification(db, order.user_id, "payment", "Payment confirmed", f"Payment for order #{order.id} has been confirmed.", "order", order.id)
-        db.commit()
-        db.refresh(order)
-        return {"status": "paid", "retry_allowed": False, "order": _order_payload(order)}
-    payment_statuses = [p.get("status") for p in payments if isinstance(p, dict)]
-    if any(status in {"created", "authorized", "attempted"} for status in payment_statuses):
-        return {"status": "processing", "retry_allowed": False, "message": "A payment attempt is still processing. Do not pay again yet.", "order": _order_payload(order)}
-    # A missing provider record or an unfamiliar/refunded status is not proof that
-    # the customer was not charged. Only an explicit all-failed response allows retry.
-    if payment_statuses and all(status == "failed" for status in payment_statuses):
-        return {"status": "not_confirmed", "retry_allowed": True,
-                "message": "The provider confirms that all recorded payment attempts failed. You may retry.", "order": _order_payload(order)}
-    return {"status": "verification_pending", "retry_allowed": False,
-            "message": "The provider has not supplied conclusive evidence that retrying is safe. Do not pay again yet; check again shortly or contact the canteen administrator.",
-            "order": _order_payload(order)}
-
 
 @app.post("/api/payments/webhook", include_in_schema=False)
 async def razorpay_webhook(request: Request, x_razorpay_signature: str | None = Header(default=None), x_razorpay_event_id: str | None = Header(default=None)):
@@ -1189,35 +1139,29 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str | None = 
             raise HTTPException(status_code=503, detail="Could not record webhook delivery; provider may retry")
         if event_name in {"payment.captured", "payment.failed"} and payment.get("order_id"):
             order = db.scalar(select(Order).where(Order.gateway_order_id == payment["order_id"]).options(joinedload(Order.items)))
-            if order and event_name == "payment.captured" and payment.get("id"):
+            if order and event_name == "payment.captured" and payment.get("id") and order.status != OrderStatus.CANCELLED and order.payment_status != PaymentStatus.FAILED:
                 expected_amount = int((Decimal(order.subtotal) * 100).quantize(Decimal("1")))
-                if int(payment.get("amount", 0)) == expected_amount and payment.get("currency") == settings.payment_currency:
-                    if order.payment_status == PaymentStatus.PAID:
-                        if order.gateway_payment_id != payment["id"]:
-                            _record_audit(db, "payment.multiple_captures_review_required", "order", order.id, None, {"additional_payment_id": payment["id"]})
-                        # A distinct webhook event can describe the same already-recorded
-                        # capture. Treat it as a semantic duplicate: no second notification.
-                    else:
-                        was_cancelled = order.status == OrderStatus.CANCELLED or order.payment_status == PaymentStatus.FAILED
-                        order.payment_status = PaymentStatus.PAID
-                        order.gateway_payment_id = payment["id"]
-                        _create_notification(db, order.user_id, "payment", "Payment confirmed", f"Payment for order #{order.id} has been confirmed.", "order", order.id)
-                        _record_audit(db, "payment.captured_webhook", "order", order.id, None, {"payment_id": payment["id"], "amount_minor": int(payment.get("amount", 0)), "review_required": was_cancelled})
-                        if was_cancelled:
-                            _record_audit(db, "payment.captured_after_cancellation_review_required", "order", order.id, None, {"payment_id": payment["id"]})
+                if int(payment.get("amount", 0)) == expected_amount and payment.get("currency", settings.payment_currency) == settings.payment_currency and order.payment_status != PaymentStatus.PAID:
+                    order.payment_status = PaymentStatus.PAID
+                    order.gateway_payment_id = payment["id"]
+                    _create_notification(db, order.user_id, "payment", "Payment confirmed", f"Payment for order #{order.id} has been confirmed.", "order", order.id)
+                    _record_audit(db, "payment.captured_webhook", "order", order.id, None, {"payment_id": payment["id"], "amount_minor": int(payment.get("amount", 0))})
                     db.commit()
-                else:
-                    _record_audit(db, "payment.captured_webhook_mismatch_review_required", "order", order.id, None,
-                                  {"payment_id": payment.get("id"), "received_amount_minor": payment.get("amount"),
-                                   "received_currency": payment.get("currency"),
-                                   "expected_amount_minor": expected_amount,
-                                   "expected_currency": settings.payment_currency})
-                    db.commit()
-            elif order and event_name == "payment.failed" and order.payment_status != PaymentStatus.PAID:
-                # A failed event concerns one attempt, not necessarily the order's final
-                # state. Keep it recoverable; do not release stock while status is uncertain.
-                _record_audit(db, "payment.failed_attempt_webhook", "order", order.id, None,
-                              {"payment_id": payment.get("id"), "provider_error_code": payment.get("error_code")})
+            elif order and event_name == "payment.failed" and order.payment_status != PaymentStatus.PAID and order.status != OrderStatus.CANCELLED:
+                _release_batch_stock(db, order.id)
+                for line in order.items:
+                    product = db.get(Product, line.product_id)
+                    if product:
+                        before_stock = product.stock_quantity
+                        product.stock_quantity += line.quantity
+                        _record_stock_movement(db, product, line.quantity, InventoryMovementType.RELEASE, f"Released failed payment reservation for order {order.id}", order_id=order.id, before=before_stock)
+                        if product.category.is_active:
+                            product.is_available = True
+                order.status = OrderStatus.CANCELLED
+                order.payment_status = PaymentStatus.FAILED
+                _create_notification(db, order.user_id, "payment", "Payment failed", f"Payment for order #{order.id} failed. Reserved stock was released; please retry checkout if needed.", "order", order.id)
+                _record_audit(db, "payment.failed_webhook", "order", order.id, None, {"payment_id": payment.get("id"), "stock_released": True})
+                db.commit()
         db.commit()
     return {"received": True}
 

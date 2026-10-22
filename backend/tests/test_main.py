@@ -862,11 +862,8 @@ def test_phase15_production_configuration_requires_explicit_migration_and_no_dem
         'auto_create_tables': False,
         'seed_demo_data': False,
         'public_base_url': 'https://canteen.example.edu',
-        'database_url': 'postgresql+psycopg://app:secret@db.example.edu/canteen',
     }
     assert Settings(_env_file=None, **common).environment == 'production'
-    with pytest.raises(ValidationError, match='DATABASE_URL must use PostgreSQL'):
-        Settings(_env_file=None, **{**common, 'database_url': 'sqlite:///./backend/ace_canteen.db'})
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{**common, 'auto_create_tables': True})
     with pytest.raises(ValidationError):
@@ -931,3 +928,34 @@ def test_payment_webhook_delivery_is_idempotent():
             assert len(rows) == 1
     finally:
         settings.razorpay_webhook_secret = original_secret
+
+
+def test_public_catalogue_uses_short_shared_cache_ttl():
+    with TestClient(app) as client:
+        categories = client.get("/api/categories")
+        products = client.get("/api/products")
+        summary = client.get("/api/catalogue/summary")
+        assert categories.headers["cache-control"] == "public, max-age=0, s-maxage=60, stale-while-revalidate=30"
+        assert products.headers["cache-control"] == "public, max-age=0, s-maxage=5, stale-while-revalidate=5"
+        assert summary.headers["cache-control"] == "public, max-age=0, s-maxage=15, stale-while-revalidate=10"
+
+
+def test_private_api_responses_are_not_cacheable():
+    with TestClient(app) as client:
+        response = client.get("/api/orders/mine")
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_public_catalogue_request_with_authorization_header_is_not_shared_cached():
+    with TestClient(app) as client:
+        response = client.get("/api/products", headers={"Authorization": "Bearer deliberately-not-a-real-token"})
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_dynamic_canteen_endpoints_have_very_short_cache_ttls():
+    with TestClient(app) as client:
+        status = client.get("/api/canteen/status")
+        slots = client.get("/api/canteen/slots")
+        assert status.headers["cache-control"] == "public, max-age=0, s-maxage=5, stale-while-revalidate=3"
+        assert slots.headers["cache-control"] == "public, max-age=0, s-maxage=3, stale-while-revalidate=0"

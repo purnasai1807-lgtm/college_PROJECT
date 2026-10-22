@@ -46,12 +46,6 @@ def test_checkout_reserves_stock_and_signature_verification_marks_paid(monkeypat
 
     try:
         monkeypatch.setattr("httpx.post", lambda *args, **kwargs: FakeGatewayResponse({"id": gateway_order_id, "amount": 2500, "currency": "INR"}))
-        # Verification now correctly requires authoritative provider evidence of capture;
-        # the test must mock the Razorpay status query as well as order creation.
-        monkeypatch.setattr("httpx.get", lambda *args, **kwargs: FakeGatewayResponse({"items": [{
-            "id": f"pay_test_{suffix}", "order_id": gateway_order_id, "amount": 2500,
-            "currency": "INR", "status": "captured"
-        }]}))
         with TestClient(app) as client:
             registered = client.post("/api/auth/register", json={"full_name": "Phase 40 Student", "email": email, "password": "safe-test-password-123"})
             assert registered.status_code == 201, registered.text

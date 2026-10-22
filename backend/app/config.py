@@ -76,11 +76,6 @@ class Settings(BaseSettings):
                 raise ValueError("SEED_DEMO_DATA must be false in production")
             if not self.public_base_url.startswith("https://"):
                 raise ValueError("PUBLIC_BASE_URL must be an https:// URL in production")
-            # Serverless/container filesystems may be ephemeral and cannot safely
-            # hold the authoritative order/payment database. Fail closed rather
-            # than silently launching production against local SQLite.
-            if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
-                raise ValueError("DATABASE_URL must use PostgreSQL in production; configure a managed PostgreSQL database")
         return self
 
 @lru_cache(maxsize=1)

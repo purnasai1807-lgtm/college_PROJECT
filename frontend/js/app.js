@@ -90,188 +90,10 @@ async function reviewCart() {
   document.querySelector('#cart-message').textContent = 'Prices and stock validated by the server. Stock is not reserved until you place the order.';
   return data;
 }
-
-// SafeCore payment recovery UI. The server remains authoritative; browser storage only
-// remembers which server-side order needs checking and never records payment success.
-const SAFECORE_RECOVERY_STORAGE = 'ace-canteen-payment-recovery-v1';
-let safeCorePollRun = 0;
-let safeCorePollTimer = null;
-
-function safeCoreRecoveryRecord() {
-  try {
-    const value = JSON.parse(localStorage.getItem(SAFECORE_RECOVERY_STORAGE) || 'null');
-    if (!value || !Number.isInteger(Number(value.orderId)) || !Number.isInteger(Number(value.userId))) return null;
-    return { orderId: Number(value.orderId), userId: Number(value.userId) };
-  } catch { return null; }
-}
-function safeCoreSaveRecovery(orderId) {
-  const userId = Number(window.aceCanteenUser?.id);
-  if (!Number.isInteger(Number(orderId)) || Number(orderId) <= 0 || !Number.isInteger(userId) || userId <= 0) return;
-  window.acePaymentRecoveryOrderId = Number(orderId);
-  try { localStorage.setItem(SAFECORE_RECOVERY_STORAGE, JSON.stringify({ orderId: Number(orderId), userId })); } catch {}
-  // Keep the recovery controls hidden while Razorpay checkout is actively open; otherwise a
-  // premature status check could invite a second checkout before the first attempt resolves.
-}
-function safeCoreClearRecovery() {
-  window.acePaymentRecoveryOrderId = null;
-  try { localStorage.removeItem(SAFECORE_RECOVERY_STORAGE); } catch {}
-  if (safeCorePollTimer) { clearTimeout(safeCorePollTimer); safeCorePollTimer = null; }
-  safeCorePollRun = 0;
-  const panel = document.querySelector('#safecore-payment-recovery');
-  if (panel) panel.hidden = true;
-}
-function safeCoreEnsurePanel() {
-  let panel = document.querySelector('#safecore-payment-recovery');
-  if (panel) return panel;
-  const message = document.querySelector('#cart-message');
-  if (!message) return null;
-  panel = document.createElement('section');
-  panel.id = 'safecore-payment-recovery';
-  panel.className = 'safecore-recovery-panel';
-  panel.hidden = true;
-  panel.setAttribute('aria-labelledby', 'safecore-recovery-title');
-  const heading = document.createElement('h3'); heading.id = 'safecore-recovery-title'; heading.textContent = 'Payment recovery';
-  const body = document.createElement('p'); body.id = 'safecore-recovery-message'; body.setAttribute('role', 'status'); body.setAttribute('aria-live', 'polite');
-  const actions = document.createElement('div'); actions.className = 'safecore-recovery-actions';
-  const check = document.createElement('button'); check.type = 'button'; check.className = 'secondary-button'; check.id = 'safecore-check-status'; check.textContent = 'Check Payment Status';
-  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'primary-button'; retry.id = 'safecore-retry-payment'; retry.textContent = 'Retry Payment'; retry.hidden = true;
-  check.addEventListener('click', () => safeCoreCheckStatus({ automatic: false }));
-  retry.addEventListener('click', async () => {
-    retry.disabled = true;
-    try {
-      const result = await safeCoreFetchStatus();
-      if (result.status === 'paid') { await safeCoreHandlePaid(result); return; }
-      if (result.retry_allowed !== true) {
-        safeCoreSetPanelMessage(result.message || 'The provider has not confirmed that retrying is safe. Please wait and check again.');
-        retry.hidden = true; return;
-      }
-      safeCoreClearRecovery();
-      await placeCartOrder();
-    } catch {
-      safeCoreSetPanelMessage('We could not verify the previous payment just now. Please do not pay again yet; check the status again shortly.');
-      retry.hidden = true;
-    } finally { retry.disabled = false; }
-  });
-  actions.append(check, retry); panel.append(heading, body, actions);
-  message.insertAdjacentElement('afterend', panel);
-  return panel;
-}
-function safeCoreShowPanel(orderId, message) {
-  const panel = safeCoreEnsurePanel();
-  if (!panel) return;
-  panel.hidden = false; panel.dataset.orderId = String(orderId);
-  safeCoreSetPanelMessage(message);
-  const retry = panel.querySelector('#safecore-retry-payment');
-  if (retry) retry.hidden = true;
-}
-function safeCoreSetPanelMessage(message) {
-  const node = document.querySelector('#safecore-recovery-message');
-  if (node) node.textContent = message;
-}
-async function safeCoreFetchStatus() {
-  const orderId = Number(window.acePaymentRecoveryOrderId);
-  if (!Number.isInteger(orderId) || orderId <= 0 || !window.aceCanteenToken) throw new Error('Sign in to check this payment.');
-  const response = await fetch(`/api/payments/status/${encodeURIComponent(orderId)}`, {
-    headers: { Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' },
-    cache: 'no-store'
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || 'Payment status could not be checked.');
-  return data;
-}
-async function safeCoreHandlePaid(result) {
-  safeCoreClearRecovery();
-  cart = {}; saveCart();
-  const order = result.order || {};
-  document.querySelector('#checkout-notes') && (document.querySelector('#checkout-notes').value = '');
-  renderCart(`Payment confirmed by the payment provider. Order #${order.id || '—'}${order.token_number ? `, pickup token #${order.token_number}` : ''}.`);
-  const ordersSection = document.querySelector('#my-orders-section');
-  if (ordersSection) { ordersSection.hidden = false; await loadMyOrders(); ordersSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  if (typeof loadCatalogue === 'function') await loadCatalogue();
-}
-async function safeCoreCheckStatus({ automatic = false } = {}) {
-  if (!window.acePaymentRecoveryOrderId) return;
-  if (safeCorePollTimer) { clearTimeout(safeCorePollTimer); safeCorePollTimer = null; }
-  const panel = safeCoreEnsurePanel();
-  if (panel) panel.hidden = false;
-  const check = panel?.querySelector('#safecore-check-status');
-  if (check) check.disabled = true;
-  safeCoreSetPanelMessage('Checking the payment provider for the latest confirmed status…');
-  try {
-    const result = await safeCoreFetchStatus();
-    if (result.status === 'paid') { await safeCoreHandlePaid(result); return; }
-    if (result.status === 'review_required') {
-      safeCoreSetPanelMessage(result.message || 'A payment review is required. Please do not pay again; contact the canteen administrator.');
-      const retry = panel?.querySelector('#safecore-retry-payment'); if (retry) retry.hidden = true;
-      return;
-    }
-    if (result.retry_allowed === true) {
-      safeCoreSetPanelMessage('The provider confirms that all recorded payment attempts failed. A new attempt is available below.');
-      const retry = panel?.querySelector('#safecore-retry-payment'); if (retry) retry.hidden = false;
-      return;
-    }
-    const message = result.message || (result.status === 'processing'
-      ? 'Your payment is still processing. Do not pay again yet.'
-      : 'Your payment is being verified. If your bank account was debited, please do not pay again yet.');
-    safeCoreSetPanelMessage(message);
-    const retry = panel?.querySelector('#safecore-retry-payment'); if (retry) retry.hidden = true;
-    if (automatic && safeCorePollRun < 5) {
-      const delays = [2000, 4000, 8000, 12000, 15000];
-      const delay = delays[safeCorePollRun++];
-      safeCorePollTimer = setTimeout(() => safeCoreCheckStatus({ automatic: true }), delay);
-    } else if (automatic) {
-      safeCoreSetPanelMessage(`${message} Automatic checks have stopped. Use Check Payment Status to check again; do not pay again while the status is uncertain.`);
-    }
-  } catch (error) {
-    safeCoreSetPanelMessage('Payment status is temporarily unavailable. If your bank account was debited, do not pay again yet. Check again when your connection is stable.');
-    const retry = panel?.querySelector('#safecore-retry-payment'); if (retry) retry.hidden = true;
-    if (automatic && safeCorePollRun < 5) {
-      const delays = [2000, 4000, 8000, 12000, 15000];
-      safeCorePollTimer = setTimeout(() => safeCoreCheckStatus({ automatic: true }), delays[safeCorePollRun++]);
-    } else if (!automatic) {
-      // Keep details out of the UI; provider/network errors are not payment failures.
-      console.info('SafeCore payment status check could not complete.');
-    }
-  } finally { if (check) check.disabled = false; }
-}
-function safeCoreRestoreRecovery() {
-  const record = safeCoreRecoveryRecord();
-  const userId = Number(window.aceCanteenUser?.id);
-  if (!record || !Number.isInteger(userId) || record.userId !== userId || window.aceCanteenUser?.role !== 'student') return;
-  window.acePaymentRecoveryOrderId = record.orderId;
-  safeCoreShowPanel(record.orderId, 'A previous checkout needs payment confirmation. If your bank account was debited, please do not pay again until we verify the transaction.');
-  safeCorePollRun = 0;
-  safeCoreCheckStatus({ automatic: true });
-}
-document.addEventListener('ace-auth-changed', event => {
-  if (event.detail?.role === 'student') safeCoreRestoreRecovery();
-  else {
-    // Keep the record for its owner; the backend still enforces order ownership.
-    window.acePaymentRecoveryOrderId = null;
-    const panel = document.querySelector('#safecore-payment-recovery');
-    if (panel) panel.hidden = true;
-  }
-});
-
 async function placeCartOrder() {
   const button = document.querySelector('#cart-checkout'); if (!button) return;
   if (!window.aceCanteenToken || window.aceCanteenUser?.role !== 'student') { document.querySelector('#account')?.scrollIntoView({ behavior: 'smooth' }); const msg = document.querySelector('#auth-message'); if (msg) msg.textContent = 'Sign in as a student to check out.'; return; }
   if (!cartLines().length) { renderCart(); return; }
-  if (window.acePaymentRecoveryOrderId) {
-    try {
-      const recovery = await safeCoreFetchStatus();
-      if (recovery.status === 'paid') { await safeCoreHandlePaid(recovery); return; }
-      if (recovery.retry_allowed !== true) {
-        safeCoreShowPanel(window.acePaymentRecoveryOrderId, recovery.message || 'A previous payment is still being verified. If debited, do not pay again yet.');
-        safeCoreCheckStatus({ automatic: true });
-        return;
-      }
-      safeCoreClearRecovery();
-    } catch (_) {
-      safeCoreShowPanel(window.acePaymentRecoveryOrderId, 'Could not verify the previous payment. If your bank account was debited, do not pay again yet; check status shortly.');
-      return;
-    }
-  }
   if (!window.Razorpay) { renderCart('Payment checkout did not load. Check your connection and reload the page.'); return; }
   button.disabled = true; const original = button.textContent; button.textContent = 'Preparing secure checkout…';
   try {
@@ -279,27 +101,23 @@ async function placeCartOrder() {
     if (!quote || !window.confirm(`Continue to secure payment for ${money(quote.subtotal)}?`)) return;
     const response = await fetch('/api/payments/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: cartLines(), notes: document.querySelector('#checkout-notes')?.value.trim() || null, pickup_slot: document.querySelector('#pickup-slot')?.value || null }) });
     const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || data.error?.message || 'Could not start payment checkout.');
-    const payment = data.payment; if (data.order?.id) { safeCoreSaveRecovery(data.order.id); safeCorePollRun = 0; }
+    const payment = data.payment;
     await new Promise((resolve, reject) => {
-      const checkout = new window.Razorpay({ key: payment.key_id, amount: payment.amount, currency: payment.currency, name: payment.name, description: payment.description, order_id: payment.gateway_order_id, prefill: payment.prefill, theme: { color: '#176b4d' }, modal: { ondismiss: () => { safeCoreShowPanel(data.order?.id || window.acePaymentRecoveryOrderId, 'Checkout was closed before confirmation. If your bank account was debited, do not pay again yet; we are checking the provider status.'); safeCorePollRun = 0; safeCoreCheckStatus({ automatic: true }); reject(new Error('Checkout closed; payment status needs verification.')); } }, handler: async result => {
+      const checkout = new window.Razorpay({ key: payment.key_id, amount: payment.amount, currency: payment.currency, name: payment.name, description: payment.description, order_id: payment.gateway_order_id, prefill: payment.prefill, theme: { color: '#176b4d' }, modal: { ondismiss: () => reject(new Error('Payment window closed. If you completed payment, refresh your order history before retrying.')) }, handler: async result => {
         try {
           const verifyResponse = await fetch('/api/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify(result) });
           const verified = await verifyResponse.json().catch(() => ({}));
-          if (!verifyResponse.ok || verified.verified !== true) {
-            safeCoreShowPanel(data.order?.id || window.acePaymentRecoveryOrderId, verified.message || 'Payment status is being verified. If your bank account was debited, do not pay again yet.'); safeCoreCheckStatus({ automatic: true });
-            reject(new Error(verified.message || verified.detail || 'Payment status is uncertain. Do not pay again yet.'));
-            return;
-          }
-          safeCoreClearRecovery(); resolve(verified.order);
+          if (!verifyResponse.ok || verified.verified !== true) throw new Error(verified.detail || 'Payment could not be verified. Do not pay again until you check order history.');
+          resolve(verified.order);
         } catch (error) { reject(error); }
       } });
-      checkout.on('payment.failed', event => { safeCoreShowPanel(data.order?.id || window.acePaymentRecoveryOrderId, 'The payment attempt reported a failure, but we must verify the final provider status before deciding whether another payment is safe. If debited, do not pay again yet.'); safeCorePollRun = 0; safeCoreCheckStatus({ automatic: true }); reject(new Error('Payment result needs verification. Use Check Payment Status before retrying.')); });
+      checkout.on('payment.failed', event => reject(new Error(event.error?.description || 'Payment failed. Please retry or use another payment method.')));
       checkout.open();
     }).then(async order => {
       cart = {}; saveCart(); document.querySelector('#checkout-notes').value = ''; renderCart(`Payment successful and verified. Order #${order.id}, pickup token #${order.token_number}.`);
       document.querySelector('#my-orders-section').hidden = false; await loadMyOrders(); await loadCatalogue(); document.querySelector('#my-orders-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-  } catch (error) { if (window.acePaymentRecoveryOrderId) { safeCoreShowPanel(window.acePaymentRecoveryOrderId, 'Your payment result is not yet confirmed. If your bank account was debited, please do not pay again. Use Check Payment Status below.'); safeCorePollRun = 0; safeCoreCheckStatus({ automatic: true }); } else { renderCart(`Checkout: ${error.message}`); } }
+  } catch (error) { renderCart(`Checkout: ${error.message}`); }
   finally { button.disabled = !cartLines().length || window.aceCanteenClosed === true; button.textContent = original; }
 }
 document.querySelector('#cart-review')?.addEventListener('click', async () => { const button = document.querySelector('#cart-review'); button.disabled = true; try { await reviewCart(); } catch (error) { renderCart(`Could not review cart: ${error.message}`); } finally { button.disabled = !cartLines().length; } });
