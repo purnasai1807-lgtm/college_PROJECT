@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # SQLite gives a zero-configuration local experience. Set DATABASE_URL to PostgreSQL in deployment.
     database_url: str = "sqlite:///./backend/ace_canteen.db"
     auto_create_tables: bool = True
-    seed_demo_data: bool = True
+    seed_demo_data: bool = False
     secret_key: str = "change-this-development-secret-before-deployment"
     access_token_minutes: int = 720
     razorpay_key_id: str = ""
