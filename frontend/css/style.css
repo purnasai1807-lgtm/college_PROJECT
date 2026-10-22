@@ -221,3 +221,24 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 .link-button{justify-self:start;border:0;background:none;padding:4px 0;color:#2b7451;font:inherit;font-weight:650;text-decoration:underline;cursor:pointer}.link-button:hover{color:#12372a}.link-button[hidden],#auth-form [hidden]{display:none!important}
 
 .canteen-status{margin:0 0 14px;padding:10px 14px;border-radius:10px;font-weight:650;font-size:.92rem}.canteen-status.open{background:#e6f4ec;color:#187044}.canteen-status.closed{background:#fdecea;color:#b42318}.canteen-status[hidden]{display:none}#pickup-slot{width:100%;padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit;background:#fff}.canteen-control{display:grid;gap:12px;margin-bottom:18px}.canteen-control label{display:grid;gap:6px;font-weight:650}.canteen-control input{padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit}
+
+
+/* Campus account preview replaces the decorative hero illustration. */
+.hero-account-preview { position: relative; min-width: 0; padding: 26px; border: 1px solid var(--border, #dce5dc); border-radius: 28px; background: #fff; box-shadow: 0 24px 70px rgba(19, 58, 43, .09); display: flex; flex-direction: column; gap: 16px; color: var(--ink, #183027); }
+.preview-auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 5px; border-radius: 14px; background: #f0f4ef; font-weight: 700; text-align: center; }
+.preview-auth-tabs span { padding: 12px 8px; border-radius: 10px; color: #53645a; }
+.preview-auth-tabs .preview-tab-active { background: #fff; color: #143b2c; box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+.preview-field { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 700; }
+.preview-field strong { min-height: 45px; display: flex; align-items: center; padding: 0 14px; border: 1px solid #d5dfd5; border-radius: 11px; color: #69766f; font-size: 14px; font-weight: 500; }
+.preview-signin { display: block; padding: 15px 18px; border-radius: 12px; background: #123b2c; color: #fff; text-align: center; text-decoration: none; font-weight: 700; }
+.preview-forgot { color: #187653; font-weight: 700; text-underline-offset: 3px; }
+.preview-notifications { margin-top: 4px; padding: 17px; border: 1px solid #e0e8df; border-radius: 17px; }
+.preview-notifications > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.preview-notifications > div strong { font-size: 16px; }
+.preview-notifications > div span, .preview-notifications p { color: var(--muted, #66756c); font-size: 13px; }
+.preview-notifications p { margin: 12px 0 0; }
+.preview-password { display: grid; gap: 9px; color: #526259; font-size: 12px; }
+.preview-password span { padding: 11px 12px; border: 1px solid #d5dfd5; border-radius: 9px; }
+.preview-password strong { justify-self: start; padding: 10px 13px; border: 1px solid #c7d6c6; border-radius: 9px; color: #143b2c; }
+.preview-account-link { align-self: flex-start; color: #187653; font-size: 13px; font-weight: 700; text-decoration: none; }
+@media (max-width: 620px) { .hero-account-preview { padding: 19px; border-radius: 22px; gap: 13px; } }
