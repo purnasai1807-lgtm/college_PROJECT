@@ -1,7 +1,9 @@
 """Environment-based application settings."""
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
+from sqlalchemy.engine import make_url
 
 class Settings(BaseSettings):
     app_name: str = "ACE Canteen"
@@ -40,6 +42,18 @@ class Settings(BaseSettings):
     # Optional shared store for login/reset throttling so several app workers share the same counters.
     redis_url: str = ""  # True for implicit TLS (port 465); otherwise STARTTLS is used
     model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
+
+    @model_validator(mode="after")
+    def resolve_relative_sqlite_path(self):
+        """Resolve local SQLite paths from the repository root, not the shell cwd."""
+        url = make_url(self.database_url)
+        if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+            database_path = Path(url.database)
+            if not database_path.is_absolute():
+                project_root = Path(__file__).resolve().parents[2]
+                database_path = (project_root / database_path).resolve()
+                self.database_url = url.set(database=str(database_path)).render_as_string(hide_password=False)
+        return self
 
     @model_validator(mode="after")
     def validate_security_settings(self):
