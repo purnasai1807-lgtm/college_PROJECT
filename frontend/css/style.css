@@ -230,3 +230,16 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 #pickup-qr-order-details { display: grid; gap: .65rem; margin-top: .75rem; }
 #pickup-qr-order-details ul { margin: 0; padding-left: 1.25rem; }
 #pickup-qr-code-input { flex: 1 1 220px; min-width: 0; }
+
+
+/* Account-first hero layout: replaces the decorative food illustration. */
+.hero { grid-template-columns: minmax(0, 1fr) minmax(340px, 0.9fr); }
+.hero-account-wrap { min-width: 0; }
+.hero-account.auth-section { padding: 0; margin: 0; }
+.hero-account .auth-card { width: 100%; max-width: 500px; margin: 0 auto; }
+.hero-account .auth-message { margin-bottom: 0; }
+.hero-account .notification-center { margin-top: 18px; }
+@media (max-width: 760px) {
+  .hero { grid-template-columns: 1fr; gap: 28px; padding: 38px 0 48px; }
+  .hero-account .auth-card { max-width: none; }
+}

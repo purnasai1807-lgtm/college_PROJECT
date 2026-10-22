@@ -35,8 +35,20 @@
         <p class="hero-description">A simpler way to order food and stationery on campus. Pay securely, follow your token, and pick up when your order is ready.</p>
         <a class="primary-button" href="#catalogue">Browse the menu <span aria-hidden="true">↗</span></a>
       </div>
-      <div class="hero-art hero-art-image">
-        <img src="/assets/canteen-hero.png" alt="Illustration for the ACE Canteen ordering application" fetchpriority="high">
+      <div class="hero-account-wrap">
+<section class="auth-section hero-account" id="account" aria-label="Account sign in">
+      
+      <div class="auth-card">
+        <div class="auth-tabs"><button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button><button type="button" class="auth-tab" data-auth-mode="register">Create account</button></div>
+        <form id="auth-form">
+          <label id="auth-name-wrap" hidden>Full name<input id="auth-name" autocomplete="name" minlength="2" maxlength="120" placeholder="Your full name"></label>
+          <label id="auth-email-wrap">Email address<input id="auth-email" type="email" autocomplete="email" required placeholder="you@college.edu"></label>
+          <label id="auth-password-wrap"><span id="auth-password-label">Password</span><input id="auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="At least 12 characters"></label>
+          <button class="primary-button auth-submit" type="submit" id="auth-submit">Sign in</button>
+          <button type="button" class="link-button" id="auth-forgot">Forgot your password?</button>
+        </form>
+        <p id="auth-message" class="auth-message" role="status" aria-live="polite">You are not signed in.</p>
+        <div id="account-panel" class="account-panel" hidden><strong id="account-name"></strong><span id="account-role"></span><section class="notification-center" id="notification-center" aria-labelledby="notification-heading"><div class="management-list-head"><h3 id="notification-heading">Notifications <span class="notification-count" id="notification-unread-count">0 unread</span></h3><button type="button" class="secondary-button" id="notifications-mark-all">Mark all read</button></div><p class="management-message" id="notification-message" role="status" aria-live="polite">Your updates will appear here.</p><div id="notification-list" class="notification-list"></div></section>
       </div>
     </section>
 
@@ -189,19 +201,7 @@
         <p id="admin-webhook-message" role="status"></p>
         <div class="table-scroll"><table><thead><tr><th>Event ID</th><th>Event</th><th>Received</th></tr></thead><tbody id="admin-webhooks-body"></tbody></table></div>
       </section>
-    <section class="auth-section" id="account">
-      <div class="section-heading"><p class="eyebrow">PHASE 3 · STUDENT ACCOUNTS</p><h2>Your campus account.</h2><p>Create a student account or sign in. Staff and admin roles are assigned securely by an administrator.</p></div>
-      <div class="auth-card">
-        <div class="auth-tabs"><button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button><button type="button" class="auth-tab" data-auth-mode="register">Create account</button></div>
-        <form id="auth-form">
-          <label id="auth-name-wrap" hidden>Full name<input id="auth-name" autocomplete="name" minlength="2" maxlength="120" placeholder="Your full name"></label>
-          <label id="auth-email-wrap">Email address<input id="auth-email" type="email" autocomplete="email" required placeholder="you@college.edu"></label>
-          <label id="auth-password-wrap"><span id="auth-password-label">Password</span><input id="auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="At least 12 characters"></label>
-          <button class="primary-button auth-submit" type="submit" id="auth-submit">Sign in</button>
-          <button type="button" class="link-button" id="auth-forgot">Forgot your password?</button>
-        </form>
-        <p id="auth-message" class="auth-message" role="status" aria-live="polite">You are not signed in.</p>
-        <div id="account-panel" class="account-panel" hidden><strong id="account-name"></strong><span id="account-role"></span><section class="notification-center" id="notification-center" aria-labelledby="notification-heading"><div class="management-list-head"><h3 id="notification-heading">Notifications <span class="notification-count" id="notification-unread-count">0 unread</span></h3><button type="button" class="secondary-button" id="notifications-mark-all">Mark all read</button></div><p class="management-message" id="notification-message" role="status" aria-live="polite">Your updates will appear here.</p><div id="notification-list" class="notification-list"></div></section><form id="change-password-form" class="password-change-form"><label>Current password<input id="current-password" type="password" required autocomplete="current-password"></label><label>New password (12+ characters)<input id="new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit" class="secondary-button">Change password</button><p id="password-change-message" class="auth-message" role="status"></p></form><button type="button" class="secondary-button" id="auth-logout">Sign out</button></div>
+    <form id="change-password-form" class="password-change-form"><label>Current password<input id="current-password" type="password" required autocomplete="current-password"></label><label>New password (12+ characters)<input id="new-password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit" class="secondary-button">Change password</button><p id="password-change-message" class="auth-message" role="status"></p></form><button type="button" class="secondary-button" id="auth-logout">Sign out</button></div>
       </div>
     </section>
 
