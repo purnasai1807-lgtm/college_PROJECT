@@ -97,9 +97,11 @@ def test_slots_listed_validated_and_capacity_enforced(monkeypatch):
     with TestClient(app) as client:
         student, _ = _headers(client)
         slots = client.get("/api/canteen/slots").json()["slots"]
-        if len(slots) < 2:
-            return  # only possible in the last minutes of the day
-        chosen = slots[0]
+        # The local SQLite database can retain orders from earlier test runs.
+        # Select a genuinely bookable slot rather than assuming the first one is empty.
+        chosen = next((slot for slot in slots if slot["remaining"] > 0), None)
+        if chosen is None or len(slots) < 2:
+            return  # no available slot (or only one slot remains near closing)
         cart = {"items": [{"product_id": _first_product(client), "quantity": 1}], "pickup_slot": chosen["slot"]}
         assert client.post("/api/orders/quote", headers=student, json=cart).status_code == 200
         assert client.post("/api/orders/quote", headers=student, json={**cart, "pickup_slot": "2000-01-01T10:00:00+05:30"}).status_code == 409

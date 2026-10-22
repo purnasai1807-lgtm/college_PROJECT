@@ -206,7 +206,7 @@ async function safeCoreCheckStatus({ automatic = false } = {}) {
       return;
     }
     if (result.retry_allowed === true) {
-      safeCoreSetPanelMessage('The provider was reached and no captured or active payment was found for this order. A new attempt is available below.');
+      safeCoreSetPanelMessage('The provider confirms that all recorded payment attempts failed. A new attempt is available below.');
       const retry = panel?.querySelector('#safecore-retry-payment'); if (retry) retry.hidden = false;
       return;
     }

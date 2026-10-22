@@ -1110,9 +1110,24 @@ def payment_status(order_id: int, user: User = Depends(require_roles("student"))
         return {"status": "verification_pending", "retry_allowed": False,
                 "message": "Payment status is temporarily unavailable. If debited, do not pay again yet.", "order": _order_payload(order)}
     expected_amount = int((Decimal(order.subtotal) * 100).quantize(Decimal("1")))
-    captured = [p for p in payments if p.get("status") == "captured" and int(p.get("amount", -1)) == expected_amount and p.get("currency") == settings.payment_currency]
+    # Never expose a retry when a capture exists but cannot be reconciled to this
+    # order. The old implementation filtered mismatched captures out, then treated
+    # them like a failed attempt and could invite a second charge.
+    captured = [p for p in payments if isinstance(p, dict) and p.get("status") == "captured"]
     if captured:
-        chosen = captured[0]
+        valid_captured = [p for p in captured
+                          if p.get("id") and str(p.get("amount", "")) == str(expected_amount)
+                          and p.get("currency") == settings.payment_currency]
+        captured_ids = {p.get("id") for p in captured if p.get("id")}
+        if len(captured) != 1 or len(valid_captured) != 1 or len(captured_ids) != 1:
+            _record_audit(db, "payment.capture_mismatch_review_required", "order", order.id, None,
+                          {"captured_payment_ids": sorted(str(value) for value in captured_ids),
+                           "expected_amount_minor": expected_amount, "expected_currency": settings.payment_currency})
+            db.commit()
+            return {"status": "review_required", "retry_allowed": False,
+                    "message": "A captured payment needs administrator review. Do not pay again; contact the canteen administrator.",
+                    "order": _order_payload(order)}
+        chosen = valid_captured[0]
         if order.gateway_payment_id and order.gateway_payment_id != chosen.get("id"):
             _record_audit(db, "payment.multiple_captures_review_required", "order", order.id, None,
                           {"existing_payment_id": order.gateway_payment_id, "additional_payment_id": chosen.get("id")})
@@ -1125,10 +1140,17 @@ def payment_status(order_id: int, user: User = Depends(require_roles("student"))
         db.commit()
         db.refresh(order)
         return {"status": "paid", "retry_allowed": False, "order": _order_payload(order)}
-    if any(p.get("status") in {"created", "authorized"} for p in payments):
+    payment_statuses = [p.get("status") for p in payments if isinstance(p, dict)]
+    if any(status in {"created", "authorized", "attempted"} for status in payment_statuses):
         return {"status": "processing", "retry_allowed": False, "message": "A payment attempt is still processing. Do not pay again yet.", "order": _order_payload(order)}
-    return {"status": "not_confirmed", "retry_allowed": True,
-            "message": "No captured or processing payment was found. A retry may be attempted.", "order": _order_payload(order)}
+    # A missing provider record or an unfamiliar/refunded status is not proof that
+    # the customer was not charged. Only an explicit all-failed response allows retry.
+    if payment_statuses and all(status == "failed" for status in payment_statuses):
+        return {"status": "not_confirmed", "retry_allowed": True,
+                "message": "The provider confirms that all recorded payment attempts failed. You may retry.", "order": _order_payload(order)}
+    return {"status": "verification_pending", "retry_allowed": False,
+            "message": "The provider has not supplied conclusive evidence that retrying is safe. Do not pay again yet; check again shortly or contact the canteen administrator.",
+            "order": _order_payload(order)}
 
 
 @app.post("/api/payments/webhook", include_in_schema=False)
@@ -1169,9 +1191,12 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str | None = 
             order = db.scalar(select(Order).where(Order.gateway_order_id == payment["order_id"]).options(joinedload(Order.items)))
             if order and event_name == "payment.captured" and payment.get("id"):
                 expected_amount = int((Decimal(order.subtotal) * 100).quantize(Decimal("1")))
-                if int(payment.get("amount", 0)) == expected_amount and payment.get("currency", settings.payment_currency) == settings.payment_currency:
-                    if order.payment_status == PaymentStatus.PAID and order.gateway_payment_id != payment["id"]:
-                        _record_audit(db, "payment.multiple_captures_review_required", "order", order.id, None, {"additional_payment_id": payment["id"]})
+                if int(payment.get("amount", 0)) == expected_amount and payment.get("currency") == settings.payment_currency:
+                    if order.payment_status == PaymentStatus.PAID:
+                        if order.gateway_payment_id != payment["id"]:
+                            _record_audit(db, "payment.multiple_captures_review_required", "order", order.id, None, {"additional_payment_id": payment["id"]})
+                        # A distinct webhook event can describe the same already-recorded
+                        # capture. Treat it as a semantic duplicate: no second notification.
                     else:
                         was_cancelled = order.status == OrderStatus.CANCELLED or order.payment_status == PaymentStatus.FAILED
                         order.payment_status = PaymentStatus.PAID
@@ -1180,6 +1205,13 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str | None = 
                         _record_audit(db, "payment.captured_webhook", "order", order.id, None, {"payment_id": payment["id"], "amount_minor": int(payment.get("amount", 0)), "review_required": was_cancelled})
                         if was_cancelled:
                             _record_audit(db, "payment.captured_after_cancellation_review_required", "order", order.id, None, {"payment_id": payment["id"]})
+                    db.commit()
+                else:
+                    _record_audit(db, "payment.captured_webhook_mismatch_review_required", "order", order.id, None,
+                                  {"payment_id": payment.get("id"), "received_amount_minor": payment.get("amount"),
+                                   "received_currency": payment.get("currency"),
+                                   "expected_amount_minor": expected_amount,
+                                   "expected_currency": settings.payment_currency})
                     db.commit()
             elif order and event_name == "payment.failed" and order.payment_status != PaymentStatus.PAID:
                 # A failed event concerns one attempt, not necessarily the order's final

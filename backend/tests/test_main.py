@@ -862,8 +862,11 @@ def test_phase15_production_configuration_requires_explicit_migration_and_no_dem
         'auto_create_tables': False,
         'seed_demo_data': False,
         'public_base_url': 'https://canteen.example.edu',
+        'database_url': 'postgresql+psycopg://app:secret@db.example.edu/canteen',
     }
     assert Settings(_env_file=None, **common).environment == 'production'
+    with pytest.raises(ValidationError, match='DATABASE_URL must use PostgreSQL'):
+        Settings(_env_file=None, **{**common, 'database_url': 'sqlite:///./backend/ace_canteen.db'})
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{**common, 'auto_create_tables': True})
     with pytest.raises(ValidationError):

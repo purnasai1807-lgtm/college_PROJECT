@@ -35,6 +35,12 @@ uvicorn app.main:app --app-dir backend --reload
 
 Set `DATABASE_URL` to a local SQLite path for development or PostgreSQL for a shared deployment. Keep `SECRET_KEY` unique and at least 32 characters. For production, set `ENVIRONMENT=production`, `AUTO_CREATE_TABLES=false`, `SEED_DEMO_DATA=false`, and `PUBLIC_BASE_URL=https://your-real-domain`; configure the database and run migrations before starting the web app.
 
+After the server starts, open `http://127.0.0.1:8000/`. In another terminal, run `python scripts/smoke_test.py` to verify the homepage, health, database readiness, product catalogue and categories over HTTP. You can pass a deployed URL, such as `python scripts/smoke_test.py https://your-domain.example`, to smoke-test a reachable deployment without creating test accounts or orders.
+
+## Production safety added in Phase 58
+
+Production configuration now refuses to start with SQLite. Set `DATABASE_URL` to a managed PostgreSQL URL (for example `postgresql+psycopg://...`) so accounts, orders and payment state are not stored on an ephemeral container filesystem. A pickup-slot regression test was also made resilient to previously persisted test orders in the local SQLite database.
+
 ## Create the first administrator
 
 After setting the production `DATABASE_URL` and applying migrations, run the bootstrap command in the app environment. It prompts for the password without echoing it and requires at least 12 characters:
@@ -73,6 +79,8 @@ The local release gate runs backend tests, Python compilation and JavaScript syn
 ## SafeCore payment recovery UI
 
 The student checkout includes a SafeCore recovery panel for uncertain Razorpay results. If checkout is dismissed, the browser loses connectivity, or provider confirmation is delayed, the student sees a warning not to pay again while the payment is uncertain. `Check Payment Status` calls the authenticated `/api/payments/status/{order_id}` endpoint. The UI performs a bounded sequence of automatic checks and stops polling; students can check manually afterward. The retry button is shown only when the backend returns `retry_allowed: true` after querying Razorpay. Browser storage keeps only the order ID and owner user ID, not a payment-success claim; the backend verifies ownership on every request.
+
+**Conservative retry rule (Phase 57):** retry is permitted only when Razorpay returns one or more recorded attempts and every attempt is explicitly `failed`. An empty provider response, an unknown/refunded status, an active/authorized attempt, a captured payment with mismatched amount/currency, or multiple captures never enables retry. Captured-payment mismatches are written to the audit log for administrator investigation. Webhook captures must include the expected currency; missing or mismatched currency is not silently accepted and is audited. A repeat capture event for an already-recorded payment does not send a duplicate payment-confirmation notification.
 
 Run payment-related tests from the repository root with a writable test database, for example:
 
