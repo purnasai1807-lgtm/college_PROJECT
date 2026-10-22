@@ -1,6 +1,7 @@
 """ACE Canteen API: Phase 1 foundation + Phase 2 persistence."""
 from contextlib import asynccontextmanager
 import csv
+import base64
 import io
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -886,12 +887,30 @@ def set_ordering_paused(payload: CanteenOrderingIn, staff: User = Depends(requir
     db.commit()
     return _canteen_status(db)
 
+def _pickup_qr_code(order_id: int) -> str:
+    """Create a tamper-evident pickup code; order details are fetched only by signed-in staff."""
+    raw_id = str(order_id)
+    signature = hmac.new(get_settings().secret_key.encode(), f"ace-pickup:{raw_id}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{raw_id}.{signature}"
+
+
+def _validate_pickup_qr(code: str) -> int:
+    try:
+        raw_id, supplied_signature = code.strip().split(".", 1)
+        order_id = int(raw_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="Invalid pickup QR code")
+    if order_id <= 0 or not hmac.compare_digest(_pickup_qr_code(order_id), f"{raw_id}.{supplied_signature}"):
+        raise HTTPException(status_code=422, detail="Invalid pickup QR code")
+    return order_id
+
+
 def _order_payload(order: Order) -> dict[str, Any]:
     return {
         "id": order.id, "user_id": order.user_id, "token_number": order.token_number,
         "token_date": order.token_date, "status": order.status.value,
         "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "pickup_slot": _as_utc(order.pickup_slot).isoformat() if order.pickup_slot else None,
-        "notes": order.notes, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "created_at": order.created_at, "updated_at": order.updated_at,
+        "notes": order.notes, "pickup_qr_code": _pickup_qr_code(order.id) if order.payment_status == PaymentStatus.PAID else None, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "created_at": order.created_at, "updated_at": order.updated_at,
         "items": [{"id": item.id, "product_id": item.product_id, "product_name": item.product_name,
                    "unit_price": str(item.unit_price), "quantity": item.quantity, "line_total": str(item.line_total)}
                   for item in order.items]
@@ -1139,6 +1158,28 @@ def queue_overview(db: Session = Depends(get_db)):
         "queue": token_rows,
         "estimate_minutes_per_order": 5,
         "estimate_note": "Wait times are approximate and may change with preparation time.",
+    }
+
+
+@app.post("/api/staff/pickup/scan", tags=["staff tools"], summary="Read a student's signed pickup QR")
+def scan_pickup_qr(payload: dict[str, Any], staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
+    code = str(payload.get("code", ""))
+    order_id = _validate_pickup_qr(code)
+    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items), joinedload(Order.user)))
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(status_code=409, detail="Payment is not verified. Do not hand over this order.")
+    if order.status == OrderStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="This order has already been collected.")
+    if order.status != OrderStatus.READY:
+        raise HTTPException(status_code=409, detail=f"Order is {order.status.value}. It must be marked ready before collection.")
+    return {
+        "order_id": order.id, "token_number": order.token_number, "status": order.status.value,
+        "payment_status": order.payment_status.value, "customer_name": order.user.full_name if order.user else "Student",
+        "items": [{"product_name": item.product_name, "quantity": item.quantity, "unit_price": str(item.unit_price), "line_total": str(item.line_total)} for item in order.items],
+        "subtotal": str(order.subtotal), "pickup_slot": _as_utc(order.pickup_slot).isoformat() if order.pickup_slot else None,
+        "message": "Payment verified. Check the products and quantities before handing over."
     }
 
 
