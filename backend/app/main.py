@@ -541,13 +541,13 @@ def create_category(payload: CategoryCreate, _: User = Depends(require_roles("ad
     return category
 
 @app.get("/api/admin/products", response_model=list[ProductOut], tags=["catalogue administration"])
-def list_managed_products(_: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def list_managed_products(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     """Return available and archived products to authorized catalogue managers only."""
     stmt = select(Product).join(Product.category).options(joinedload(Product.category)).order_by(Product.item_type, Product.name)
     return db.scalars(stmt).all()
 
 @app.post("/api/admin/products", response_model=ProductOut, status_code=201, tags=["catalogue administration"])
-def create_product(payload: ProductCreate, _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def create_product(payload: ProductCreate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     category = db.get(Category, payload.category_id)
     if category is None or not category.is_active:
         raise HTTPException(status_code=400, detail="A valid active category is required")
@@ -577,7 +577,7 @@ def create_product(payload: ProductCreate, _: User = Depends(require_roles("admi
     return product
 
 @app.patch("/api/admin/products/{product_id}", response_model=ProductOut, tags=["catalogue administration"])
-def update_product(product_id: int, payload: ProductUpdate, _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def update_product(product_id: int, payload: ProductUpdate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     product = db.scalar(select(Product).options(joinedload(Product.category)).where(Product.id == product_id))
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -615,7 +615,7 @@ def update_product(product_id: int, payload: ProductUpdate, _: User = Depends(re
     return product
 
 @app.delete("/api/admin/products/{product_id}", response_model=ProductOut, tags=["catalogue administration"])
-def archive_product(product_id: int, _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def archive_product(product_id: int, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     product = db.scalar(select(Product).options(joinedload(Product.category)).where(Product.id == product_id))
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -661,7 +661,7 @@ def update_category(category_id: int, payload: CategoryUpdate, _: User = Depends
     return category
 
 @app.get("/api/admin/inventory/summary", tags=["inventory"], summary="Inventory totals and low-stock alerts")
-def inventory_summary(_: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def inventory_summary(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     products = db.scalars(select(Product).join(Product.category).options(joinedload(Product.category)).where(Product.is_archived.is_(False), Category.is_active.is_(True)).order_by(Product.name)).all()
     low = [p for p in products if p.stock_quantity <= p.low_stock_threshold]
     out_of_stock = [p for p in products if p.stock_quantity == 0]
@@ -676,7 +676,7 @@ def inventory_movements(product_id: int | None = Query(default=None, gt=0), move
     return [{"id": m.id, "product_id": m.product_id, "actor_user_id": m.actor_user_id, "order_id": m.order_id, "movement_type": m.movement_type.value, "quantity_delta": m.quantity_delta, "quantity_before": m.quantity_before, "quantity_after": m.quantity_after, "reason": m.reason, "created_at": m.created_at, "product_name": m.product.name if m.product else f"Product #{m.product_id}", "actor_name": m.actor.full_name if m.actor else None} for m in rows]
 
 @app.post("/api/admin/inventory/adjustments", status_code=201, tags=["inventory"], summary="Receive, adjust or write off inventory")
-def adjust_inventory(payload: StockAdjustmentIn, staff: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def adjust_inventory(payload: StockAdjustmentIn, staff: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     product = db.scalar(select(Product).where(Product.id == payload.product_id).with_for_update())
     if product is None: raise HTTPException(status_code=404, detail="Product not found")
     before = product.stock_quantity
@@ -705,7 +705,7 @@ def adjust_inventory(payload: StockAdjustmentIn, staff: User = Depends(require_r
     return {"product_id": product.id, "product_name": product.name, "stock_quantity": product.stock_quantity, "low_stock_threshold": product.low_stock_threshold, "movement_type": movement.value, "quantity_delta": delta}
 
 @app.patch("/api/admin/inventory/products/{product_id}/threshold", tags=["inventory"], summary="Configure a product low-stock threshold")
-def update_stock_threshold(product_id: int, payload: StockThresholdUpdate, _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def update_stock_threshold(product_id: int, payload: StockThresholdUpdate, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     product = db.get(Product, product_id)
     if product is None: raise HTTPException(status_code=404, detail="Product not found")
     old_threshold = product.low_stock_threshold
@@ -1569,12 +1569,12 @@ def create_supplier(payload: SupplierCreateIn, admin: User = Depends(require_rol
     return {"id": supplier.id, "name": supplier.name, "contact_name": supplier.contact_name, "phone": supplier.phone, "email": supplier.email, "notes": supplier.notes, "is_active": supplier.is_active}
 
 @app.get("/api/admin/suppliers", tags=["procurement"])
-def list_suppliers(_: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def list_suppliers(_: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     rows = db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
     return [{"id": x.id, "name": x.name, "contact_name": x.contact_name, "phone": x.phone, "email": x.email, "notes": x.notes, "is_active": x.is_active} for x in rows]
 
 @app.post("/api/admin/inventory/batches", status_code=201, tags=["inventory", "procurement"])
-def receive_batch(payload: BatchReceiptIn, staff: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def receive_batch(payload: BatchReceiptIn, staff: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     product = db.scalar(select(Product).where(Product.id == payload.product_id).options(joinedload(Product.category)))
     if product is None or product.is_archived:
         raise HTTPException(status_code=404, detail="Active product not found")
@@ -1593,7 +1593,7 @@ def receive_batch(payload: BatchReceiptIn, staff: User = Depends(require_roles("
     return {"id": batch.id, "product_id": batch.product_id, "supplier_id": batch.supplier_id, "batch_code": batch.batch_code, "quantity_received": batch.quantity_received, "quantity_remaining": batch.quantity_remaining, "expiry_date": batch.expiry_date, "stock_after": product.stock_quantity}
 
 @app.get("/api/admin/inventory/expiry", tags=["inventory"])
-def inventory_expiry(days: int = Query(default=30, ge=0, le=365), _: User = Depends(require_roles("admin", "staff")), db: Session = Depends(get_db)):
+def inventory_expiry(days: int = Query(default=30, ge=0, le=365), _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
     today = _date.today(); cutoff = today + timedelta(days=days)
     batches = db.scalars(select(ProductBatch).options(joinedload(ProductBatch.product), joinedload(ProductBatch.supplier)).where(ProductBatch.quantity_remaining > 0, ProductBatch.expiry_date.is_not(None), ProductBatch.expiry_date <= cutoff).order_by(ProductBatch.expiry_date.asc()).limit(500)).all()
     return {"as_of": today.isoformat(), "window_days": days, "count": len(batches), "batches": [{"id": b.id, "product_id": b.product_id, "product_name": b.product.name, "supplier_id": b.supplier_id, "supplier_name": b.supplier.name if b.supplier else None, "batch_code": b.batch_code, "quantity_remaining": b.quantity_remaining, "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None, "expired": bool(b.expiry_date and b.expiry_date < today)} for b in batches]}
