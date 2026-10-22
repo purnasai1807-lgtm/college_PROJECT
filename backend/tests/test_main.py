@@ -158,7 +158,7 @@ def test_admin_can_manage_roles_and_catalogue():
         assert updated_category.json()["description"] == "Updated by admin"
 
 
-def test_phase4_staff_can_create_update_and_archive_products():
+def test_admin_can_create_update_and_archive_products():
     with TestClient(app) as client:
         import uuid
         from app.database import SessionLocal
@@ -168,7 +168,7 @@ def test_phase4_staff_can_create_update_and_archive_products():
         suffix = uuid.uuid4().hex[:8]
         email = f"phase4-staff-{suffix}@example.edu"
         with SessionLocal() as db:
-            staff = User(full_name="Catalogue Staff", email=email, password_hash=hash_password("test-staff-password-123"), role=UserRole.STAFF, is_active=True)
+            staff = User(full_name="Catalogue Staff", email=email, password_hash=hash_password("test-staff-password-123"), role=UserRole.ADMIN, is_active=True)
             db.add(staff)
             db.commit()
         login = client.post("/api/auth/login", json={"email": email, "password": "test-staff-password-123"})
@@ -193,7 +193,7 @@ def test_phase4_staff_can_create_update_and_archive_products():
         assert all(item["id"] != product_id for item in visible.json())
 
 
-def test_phase4_staff_cannot_create_categories_and_product_type_must_match_category():
+def test_staff_cannot_create_categories_or_products():
     with TestClient(app) as client:
         import uuid
         from app.database import SessionLocal
@@ -210,7 +210,7 @@ def test_phase4_staff_cannot_create_categories_and_product_type_must_match_categ
         assert category_response.status_code == 403
         stationery_category = client.get("/api/categories?item_type=stationery").json()[0]
         mismatch = client.post("/api/admin/products", headers=headers, json={"category_id": stationery_category["id"], "name": f"Mismatched Item {suffix}", "item_type": "food", "price": "10.00", "stock_quantity": 1})
-        assert mismatch.status_code == 400
+        assert mismatch.status_code == 403
 
 
 def test_catalogue_searches_descriptions_and_categories_and_supports_paging_sorting():
@@ -253,7 +253,7 @@ def test_product_metadata_and_image_url_validation():
         suffix = uuid.uuid4().hex[:8]
         email = f'metadata-staff-{suffix}@example.edu'
         with SessionLocal() as db:
-            db.add(User(full_name='Metadata Staff', email=email, password_hash=hash_password('metadata-password-123'), role=UserRole.STAFF, is_active=True))
+            db.add(User(full_name='Metadata Staff', email=email, password_hash=hash_password('metadata-password-123'), role=UserRole.ADMIN, is_active=True))
             db.commit()
         token = client.post('/api/auth/login', json={'email': email, 'password': 'metadata-password-123'}).json()['access_token']
         headers = {'Authorization': f'Bearer {token}'}
@@ -352,7 +352,7 @@ def test_archived_products_are_not_exposed_by_public_catalogue_query():
         suffix = uuid.uuid4().hex[:8]
         email = f'archive-visibility-{suffix}@example.edu'
         with SessionLocal() as db:
-            user = User(full_name='Visibility Staff', email=email, password_hash=hash_password('test-staff-password-123'), role=UserRole.STAFF, is_active=True)
+            user = User(full_name='Visibility Staff', email=email, password_hash=hash_password('test-staff-password-123'), role=UserRole.ADMIN, is_active=True)
             db.add(user)
             db.commit()
         token = client.post('/api/auth/login', json={'email': email, 'password': 'test-staff-password-123'}).json()['access_token']
@@ -670,7 +670,7 @@ def test_phase11_inventory_receipt_waste_threshold_and_ledger():
         suffix = uuid.uuid4().hex[:8]
         email = f'inventory-staff-{suffix}@example.edu'
         with SessionLocal() as db:
-            db.add(User(full_name='Inventory Staff', email=email, password_hash=hash_password('inventory-password-123'), role=UserRole.STAFF, is_active=True))
+            db.add(User(full_name='Inventory Staff', email=email, password_hash=hash_password('inventory-password-123'), role=UserRole.ADMIN, is_active=True))
             db.commit()
         token = client.post('/api/auth/login', json={'email': email, 'password': 'inventory-password-123'}).json()['access_token']
         headers = {'Authorization': f'Bearer {token}'}

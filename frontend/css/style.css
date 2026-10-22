@@ -223,11 +223,10 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 .canteen-status{margin:0 0 14px;padding:10px 14px;border-radius:10px;font-weight:650;font-size:.92rem}.canteen-status.open{background:#e6f4ec;color:#187044}.canteen-status.closed{background:#fdecea;color:#b42318}.canteen-status[hidden]{display:none}#pickup-slot{width:100%;padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit;background:#fff}.canteen-control{display:grid;gap:12px;margin-bottom:18px}.canteen-control label{display:grid;gap:6px;font-weight:650}.canteen-control input{padding:11px 12px;border:1px solid #d5dfd6;border-radius:10px;font:inherit}
 
 
-/* Live campus account replaces the decorative hero illustration. */
-.hero-account-live { min-width: 0; }
-.hero-account-live .auth-section { padding: 0; background: transparent; }
-.hero-account-live .section-heading { text-align: center; margin-bottom: 22px; }
-.hero-account-live .section-heading h2 { font-size: clamp(26px, 3vw, 36px); }
-.hero-account-live .section-heading p:last-child { max-width: 520px; margin-left: auto; margin-right: auto; }
-.hero-account-live .auth-card { max-width: 100%; padding: clamp(18px, 2.5vw, 28px); }
-@media (max-width: 620px) { .hero-account-live .auth-card { padding: 18px; } }
+/* Unique student pickup QR and staff verification panel */
+.order-pickup-qr { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; margin-top: .8rem; padding: .85rem; border: 1px solid var(--border, #d8e4dd); border-radius: 12px; background: var(--surface, #fff); }
+.pickup-qr-image { min-width: 156px; min-height: 156px; padding: 6px; background: #fff; border-radius: 8px; }
+.pickup-qr-image img, .pickup-qr-image canvas { display: block; max-width: 100%; height: auto; }
+#pickup-qr-order-details { display: grid; gap: .65rem; margin-top: .75rem; }
+#pickup-qr-order-details ul { margin: 0; padding-left: 1.25rem; }
+#pickup-qr-code-input { flex: 1 1 220px; min-width: 0; }

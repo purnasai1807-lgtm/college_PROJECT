@@ -417,7 +417,7 @@ if (productSearch && productType) {
     return input;
   }
   async function loadManagedProducts() {
-    if (!window.aceCanteenToken || !['staff', 'admin'].includes(window.aceCanteenUser?.role)) return;
+    if (!window.aceCanteenToken || window.aceCanteenUser?.role !== 'admin') return;
     productMessage.textContent = 'Loading products…'; productList.replaceChildren();
     try {
       const products = await api('/api/admin/products');
@@ -540,10 +540,17 @@ if (productSearch && productType) {
   function syncRole(user) {
     const allowed = user && ['staff', 'admin'].includes(user.role);
     panel.hidden = !allowed;
-    categoryForm.hidden = user?.role !== 'admin';
+    const adminOnly = user?.role === 'admin';
+    const productForm = document.querySelector('#product-form');
+    const productManager = document.querySelector('#manage-products-list')?.closest('.management-card');
+    const inventoryPanel = document.querySelector('#inventory-management');
+    if (productForm) productForm.hidden = !adminOnly;
+    if (productManager) productManager.hidden = !adminOnly;
+    if (inventoryPanel) inventoryPanel.hidden = !adminOnly;
+    categoryForm.hidden = !adminOnly;
     if (categoryPanel) categoryPanel.hidden = user?.role !== 'admin';
     if (userPanel) userPanel.hidden = user?.role !== 'admin';
-    if (allowed) { loadCategoryOptions().catch(error => setMessage(productMessage, error.message, 'error')); loadManagedProducts(); if (user.role === 'admin') { loadManagedCategories(); loadManagedUsers(); } }
+    if (allowed) { if (adminOnly) { loadCategoryOptions().catch(error => setMessage(productMessage, error.message, 'error')); loadManagedProducts(); loadManagedCategories(); loadManagedUsers(); } }
   }
   document.addEventListener('ace-auth-changed', event => syncRole(event.detail));
   productType?.addEventListener('change', () => loadCategoryOptions().catch(error => setMessage(document.querySelector('#product-form-message'), error.message, 'error')));
@@ -630,6 +637,14 @@ function orderRow(order, showCustomer = false, workflowStage = "all") {
   const title = document.createElement('strong'); title.textContent = `Token #${order.token_number ?? '—'} · Order ${order.id} · ${order.status.toUpperCase()}`;
   const detail = document.createElement('small'); detail.textContent = `${showCustomer ? `${order.customer_name} (${order.customer_email}) · ` : ''}Payment: ${(order.payment_status || 'pending').toUpperCase()} · ${order.items.map(i => `${i.product_name} × ${i.quantity}`).join(', ')} · ₹${Number(order.subtotal).toFixed(2)} · ${new Date(order.created_at).toLocaleString()}${order.pickup_slot ? ` · Pickup ${new Date(order.pickup_slot).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
   info.append(title, detail); row.append(info);
+  if (!showCustomer && order.payment_status === 'paid' && order.pickup_qr_code) {
+    const pickup = document.createElement('div'); pickup.className = 'order-pickup-qr';
+    const label = document.createElement('strong'); label.textContent = order.status === 'completed' ? 'Pickup completed' : 'Your unique pickup QR';
+    const code = document.createElement('div'); code.className = 'pickup-qr-image';
+    const note = document.createElement('small'); note.textContent = order.status === 'completed' ? 'This QR has already been used.' : 'Show this QR to canteen staff when your order is ready. Keep it private.';
+    pickup.append(label, code, note); row.append(pickup);
+    if (order.status !== 'completed' && window.QRCode) new window.QRCode(code, { text: `${window.location.origin}/pickup#code=${encodeURIComponent(order.pickup_qr_code)}`, width: 156, height: 156, correctLevel: window.QRCode.CorrectLevel.M });
+  }
   if (!showCustomer && order.payment_status === 'paid' && !['completed', 'cancelled'].includes(order.status)) {
     const tracker = document.createElement('div'); tracker.className = 'order-live-tracker'; tracker.setAttribute('aria-live', 'polite'); tracker.textContent = 'Updating live queue position…'; row.append(tracker);
     orderApi(`/api/orders/${order.id}/queue-position`).then(position => {
@@ -716,11 +731,55 @@ async function loadStaffWorkflow() {
     for (const id of ['kitchen-board-message', 'counter-board-message']) { const el = document.getElementById(id); if (el) el.textContent = error.message; }
   }
 }
+// Staff-only pickup QR scanning. The server verifies the signed code and payment before showing order details.
+let pickupQrScanner = null;
+let scannedPickupOrder = null;
+async function verifyPickupQr(rawCode) {
+  const message = document.querySelector('#pickup-qr-scan-message');
+  const details = document.querySelector('#pickup-qr-order-details');
+  if (!message || !details) return;
+  details.replaceChildren(); scannedPickupOrder = null; message.textContent = 'Verifying QR with the server…';
+  try {
+    const scanned = String(rawCode || '').trim();
+    const order = await orderApi('/api/staff/pickup/scan', { method: 'POST', body: JSON.stringify({ code: scanned }) });
+    scannedPickupOrder = order;
+    const heading = document.createElement('strong'); heading.textContent = `Order #${order.order_id} · Token #${order.token_number}`;
+    const status = document.createElement('p'); status.textContent = `Student: ${order.customer_name} · Payment: ${String(order.payment_status || 'unknown').toUpperCase()} · Order time: ${new Date(order.created_at).toLocaleString()} · Pickup: ${order.pickup_slot ? new Date(order.pickup_slot).toLocaleString() : 'ASAP'} · Total: ₹${Number(order.subtotal).toFixed(2)}`;
+    const items = document.createElement('ul');
+    order.items.forEach(item => { const li = document.createElement('li'); li.textContent = `${item.product_name} × ${item.quantity} — ₹${Number(item.line_total).toFixed(2)}`; items.append(li); });
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'primary-button'; confirm.textContent = 'Confirm handover & mark collected';
+    confirm.addEventListener('click', async () => {
+      confirm.disabled = true;
+      try {
+        await orderApi(`/api/admin/orders/${order.order_id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'completed' }) });
+        message.textContent = 'Collection recorded. This QR cannot be used again.'; details.replaceChildren(); scannedPickupOrder = null;
+        const input = document.querySelector('#pickup-qr-code-input'); if (input) input.value = '';
+        await loadStaffWorkflow(); await loadOrderQueue();
+      } catch (error) { message.textContent = error.message; confirm.disabled = false; }
+    });
+    details.append(heading, status, items, confirm); message.textContent = order.message;
+  } catch (error) { message.textContent = error.message; }
+}
+document.querySelector('#pickup-qr-check')?.addEventListener('click', () => verifyPickupQr(document.querySelector('#pickup-qr-code-input')?.value));
+function startPickupQrScanner() {
+  const panel = document.querySelector('#pickup-qr-scanner-panel');
+  if (!panel || !['admin', 'staff'].includes(window.aceCanteenUser?.role) || !window.Html5Qrcode || pickupQrScanner) return;
+  try {
+    pickupQrScanner = new window.Html5Qrcode('pickup-qr-reader');
+    pickupQrScanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 220, height: 220 } }, async decodedText => {
+      await pickupQrScanner.stop().catch(() => {}); pickupQrScanner = null;
+      const input = document.querySelector('#pickup-qr-code-input'); if (input) input.value = decodedText;
+      await verifyPickupQr(decodedText);
+    }, () => {}).catch(() => { pickupQrScanner = null; const msg = document.querySelector('#pickup-qr-scan-message'); if (msg) msg.textContent = 'Camera scan unavailable. Allow camera access or paste the QR code manually.'; });
+  } catch (_) { pickupQrScanner = null; }
+}
 document.querySelector('#refresh-kitchen-board')?.addEventListener('click', loadStaffWorkflow);
 document.querySelector('#refresh-counter-board')?.addEventListener('click', loadStaffWorkflow);
 document.querySelector('#refresh-my-orders')?.addEventListener('click', loadMyOrders);
 loadPublicQueue();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loadPublicQueue(); });
+document.addEventListener('ace-auth-changed', () => { startPickupQrScanner(); });
+startPickupQrScanner();
 document.querySelector('#refresh-order-queue')?.addEventListener('click', loadOrderQueue);
 document.querySelector('#queue-status-filter')?.addEventListener('change', loadOrderQueue);
 document.querySelector('#queue-payment-filter')?.addEventListener('change', loadOrderQueue);

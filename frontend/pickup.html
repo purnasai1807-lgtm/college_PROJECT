@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#153d2b">
+  <title>ACE Canteen · Pickup details</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17231c;background:#f4f7f4}*{box-sizing:border-box}body{margin:0;padding:20px}.wrap{max-width:620px;margin:0 auto}.brand{font-size:.8rem;font-weight:800;letter-spacing:.12em;color:#256344}.card{background:white;border:1px solid #dce6de;border-radius:18px;padding:22px;margin-top:14px;box-shadow:0 8px 30px #153d2b0b}h1{font-size:1.55rem;margin:.4rem 0 1rem}.muted{color:#647268}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stat{background:#f4f7f4;border-radius:12px;padding:12px;overflow-wrap:anywhere}.stat span{display:block;color:#66746a;font-size:.8rem}.stat strong{display:block;margin-top:5px}.pill{display:inline-block;padding:5px 10px;border-radius:999px;background:#e7f4eb;color:#176238;font-weight:700;font-size:.82rem}.pill.warn{background:#fff2d9;color:#82520a}.pill.bad{background:#fde8e8;color:#9b2020}ul{padding-left:20px}li{padding:7px 0;border-bottom:1px solid #edf1ed}.line{display:flex;justify-content:space-between;gap:12px}.notice{font-size:.85rem;line-height:1.5;color:#647268}.error{color:#9b2020}@media(max-width:420px){body{padding:12px}.card{padding:16px}.grid{gap:8px}}
+  </style>
+</head>
+<body><main class="wrap">
+  <div class="brand">ACE ENGINEERING COLLEGE · CANTEEN</div>
+  <section class="card"><p class="muted">QR pickup receipt</p><h1 id="title">Loading order details…</h1><p id="message" class="muted" aria-live="polite">Checking the canteen server…</p><div id="details"></div></section>
+  <p class="notice">This page does not show student name, email or payment credentials. Payment status is retrieved from the canteen server. Only authorized staff can complete a handover.</p>
+</main><script src="/js/pickup.js" defer></script></body></html>

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import csv
 import base64
 import io
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import logging
 import hashlib
@@ -257,6 +257,11 @@ async def unexpected_exception_handler(_: Request, exc: Exception) -> JSONRespon
 @app.get("/", include_in_schema=False)
 async def home() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
+
+@app.get("/pickup", include_in_schema=False)
+async def public_pickup_page() -> FileResponse:
+    """Mobile-friendly, privacy-preserving pickup status page opened by any phone camera."""
+    return FileResponse(FRONTEND_DIR / "pickup.html")
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
 async def web_app_manifest() -> FileResponse:
@@ -910,7 +915,7 @@ def _order_payload(order: Order) -> dict[str, Any]:
         "id": order.id, "user_id": order.user_id, "token_number": order.token_number,
         "token_date": order.token_date, "status": order.status.value,
         "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "pickup_slot": _as_utc(order.pickup_slot).isoformat() if order.pickup_slot else None,
-        "notes": order.notes, "pickup_qr_code": _pickup_qr_code(order.id) if order.payment_status == PaymentStatus.PAID else None, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "created_at": order.created_at, "updated_at": order.updated_at,
+        "notes": order.notes, "pickup_qr_code": _pickup_qr_code(order.id) if order.payment_status == PaymentStatus.PAID else None, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "created_at": order.created_at, "updated_at": order.updated_at, "collected_at": order.collected_at,
         "items": [{"id": item.id, "product_id": item.product_id, "product_name": item.product_name,
                    "unit_price": str(item.unit_price), "quantity": item.quantity, "line_total": str(item.line_total)}
                   for item in order.items]
@@ -1161,9 +1166,44 @@ def queue_overview(db: Session = Depends(get_db)):
     }
 
 
+def _pickup_code_from_input(raw: str) -> str:
+    """Accept both the signed token and the HTTPS URL encoded in the QR."""
+    value = (raw or "").strip()
+    if value.startswith("https://") or value.startswith("http://"):
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(value)
+        if parsed.path.rstrip("/") != "/pickup":
+            raise HTTPException(status_code=422, detail="This QR is not an ACE Canteen pickup link")
+        value = (parse_qs(parsed.query).get("code") or parse_qs(parsed.fragment).get("code") or [""])[0]
+    return value
+
+@app.post("/api/pickup/status", tags=["pickup"], summary="Privacy-preserving pickup details for any phone camera")
+def public_pickup_status(payload: dict[str, Any], db: Session = Depends(get_db)):
+    """A QR bearer link may show order contents/status, but never the student's name or email.
+
+    The token is submitted in the POST body, not a URL query string, to reduce accidental
+    leakage through browser history, referrers, and ordinary access logs.
+    """
+    code = str(payload.get("code", "")).strip()
+    if not code or len(code) > 200:
+        raise HTTPException(status_code=422, detail="Invalid pickup QR code")
+    order_id = _validate_pickup_qr(code)
+    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items)))
+    if order is None:
+        raise HTTPException(status_code=404, detail="Pickup order not found")
+    return {
+        "order_id": order.id, "token_number": order.token_number, "status": order.status.value,
+        "payment_status": order.payment_status.value, "subtotal": str(order.subtotal),
+        "created_at": order.created_at, "updated_at": order.updated_at,
+        "pickup_slot": _as_utc(order.pickup_slot).isoformat() if order.pickup_slot else None,
+        "collected_at": order.collected_at,
+        "items": [{"product_name": item.product_name, "quantity": item.quantity, "unit_price": str(item.unit_price), "line_total": str(item.line_total)} for item in order.items],
+        "message": "Payment status is shown from the canteen server. Only authorized staff can confirm collection."
+    }
+
 @app.post("/api/staff/pickup/scan", tags=["staff tools"], summary="Read a student's signed pickup QR")
 def scan_pickup_qr(payload: dict[str, Any], staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
-    code = str(payload.get("code", ""))
+    code = _pickup_code_from_input(str(payload.get("code", "")))
     order_id = _validate_pickup_qr(code)
     order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items), joinedload(Order.user)))
     if order is None:
@@ -1182,6 +1222,28 @@ def scan_pickup_qr(payload: dict[str, Any], staff: User = Depends(require_roles(
         "message": "Payment verified. Check the products and quantities before handing over."
     }
 
+
+@app.get("/api/admin/orders/{order_id}/investigation", tags=["admin order investigation"], summary="Admin-only order evidence and event timeline")
+def investigate_order(order_id: int, _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items), joinedload(Order.user)))
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    audit_rows = db.scalars(select(AuditEvent).where(AuditEvent.entity_type == "order", AuditEvent.entity_id == str(order_id)).order_by(AuditEvent.created_at.asc())).all()
+    movement_rows = db.scalars(select(InventoryMovement).where(InventoryMovement.order_id == order_id).order_by(InventoryMovement.created_at.asc())).all()
+    timeline = []
+    for event in audit_rows:
+        try:
+            details = json.loads(event.details_json or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        timeline.append({"kind": "audit", "timestamp": event.created_at, "action": event.action, "actor_user_id": event.actor_user_id, "details": details})
+    for movement in movement_rows:
+        timeline.append({"kind": "inventory", "timestamp": movement.created_at, "action": movement.movement_type.value, "product_id": movement.product_id, "quantity_delta": movement.quantity_delta, "quantity_before": movement.quantity_before, "quantity_after": movement.quantity_after, "reason": movement.reason})
+    timeline.sort(key=lambda event: event["timestamp"] or datetime.min.replace(tzinfo=timezone.utc))
+    return {
+        "order": {"id": order.id, "token_number": order.token_number, "status": order.status.value, "payment_status": order.payment_status.value, "subtotal": str(order.subtotal), "created_at": order.created_at, "updated_at": order.updated_at, "collected_at": order.collected_at, "customer_name": order.user.full_name if order.user else None, "customer_email": order.user.email if order.user else None, "items": [{"product_id": item.product_id, "product_name": item.product_name, "quantity": item.quantity, "unit_price": str(item.unit_price), "line_total": str(item.line_total)} for item in order.items]},
+        "investigation": {"audit_event_count": len(audit_rows), "inventory_movement_count": len(movement_rows), "timeline": timeline, "payment_evidence": {"payment_status": order.payment_status.value, "gateway_order_id": order.gateway_order_id, "gateway_payment_id": order.gateway_payment_id, "note": "Payment status is recorded by the application; independently verified against the payment provider means checking the provider dashboard or reconciliation records."}}
+    }
 
 @app.get("/api/orders/{order_id}/queue-position", tags=["orders"])
 def order_queue_position(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1436,7 +1498,9 @@ def admin_payment_webhook_events(
 
 @app.patch("/api/admin/orders/{order_id}/status", tags=["order queue"])
 def update_order_status(order_id: int, payload: OrderStatusIn, background: BackgroundTasks, staff: User = Depends(require_roles("staff", "admin")), db: Session = Depends(get_db)):
-    order = db.scalar(select(Order).where(Order.id == order_id).options(joinedload(Order.items)))
+    # Serialize status transitions on PostgreSQL so two staff devices cannot both
+    # complete the same pickup concurrently. SQLite ignores FOR UPDATE in local tests.
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.payment_status != PaymentStatus.PAID:
@@ -1464,6 +1528,8 @@ def update_order_status(order_id: int, payload: OrderStatusIn, background: Backg
                     product.is_available = True
     previous_status = order.status.value
     order.status = target
+    if target == OrderStatus.COMPLETED:
+        order.collected_at = datetime.now(timezone.utc)
     status_messages = {OrderStatus.CONFIRMED: ("Order confirmed", "The canteen has confirmed your order."), OrderStatus.PREPARING: ("Order is being prepared", "Your order is now being prepared."), OrderStatus.READY: ("Ready for pickup", f"Order #{order.id} is ready. Please collect it using token {order.token_number or '—'}."), OrderStatus.COMPLETED: ("Order collected", "Your order has been marked as collected. Thank you!")}
     notification_title, notification_message = status_messages[target]
     _create_notification(db, order.user_id, "order_status", notification_title, notification_message, "order", order.id)

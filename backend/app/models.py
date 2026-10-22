@@ -99,6 +99,7 @@ class Order(Base):
     pickup_slot: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)  # stored in UTC; null = as soon as possible
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     user: Mapped[User] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
 

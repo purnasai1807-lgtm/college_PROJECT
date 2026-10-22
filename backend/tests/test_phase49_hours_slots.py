@@ -138,7 +138,8 @@ def test_order_ready_sends_email_to_student():
 
 
 def test_login_throttling_can_use_a_shared_redis_store():
-    import fakeredis
+    import pytest
+    fakeredis = pytest.importorskip("fakeredis", reason="fakeredis is a declared test dependency but is unavailable in this environment")
     fake = fakeredis.FakeRedis(decode_responses=True)
     main._redis = fake
     try:

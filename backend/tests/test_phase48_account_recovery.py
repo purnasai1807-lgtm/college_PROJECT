@@ -107,4 +107,4 @@ def test_alembic_migrations_apply_cleanly_to_a_fresh_database(tmp_path):
     result = subprocess.run([sys.executable, "-m", "alembic", "-c", str(root / "backend" / "alembic.ini"), "upgrade", "head"], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-1500:]
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("select version_num from alembic_version").fetchone()[0] == "0015_canteen_hours_slots"
+        assert conn.execute("select version_num from alembic_version").fetchone()[0] == "0016_order_collected_at"

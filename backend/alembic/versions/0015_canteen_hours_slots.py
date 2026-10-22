@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 revision = "0015_canteen_hours_slots"
-down_revision = "0014_must_change_password"
+down_revision = "0015_merge_heads"
 branch_labels = None
 depends_on = None
 
