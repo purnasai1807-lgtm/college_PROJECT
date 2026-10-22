@@ -69,3 +69,8 @@ The local release gate runs backend tests, Python compilation and JavaScript syn
 - Test student/staff/admin permissions, stock reservations under concurrency, cancellations, QR collection and duplicate scans.
 - Scan QR links using real Android and iPhone cameras on the deployed HTTPS domain.
 - Run load tests and a canteen staff acceptance test before taking real orders.
+
+
+## SafeCore payment recovery
+
+See [`docs/SAFECORE-PAYMENTS.md`](docs/SAFECORE-PAYMENTS.md) for the payment state safety rules, recovery endpoint, Razorpay webhook configuration, deployment steps, and limitations. Payment reliability cannot be guaranteed against every bank/provider/network failure; the system instead keeps uncertain payments pending and prevents unsafe retries.

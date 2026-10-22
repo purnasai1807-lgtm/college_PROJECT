@@ -94,6 +94,17 @@ async function placeCartOrder() {
   const button = document.querySelector('#cart-checkout'); if (!button) return;
   if (!window.aceCanteenToken || window.aceCanteenUser?.role !== 'student') { document.querySelector('#account')?.scrollIntoView({ behavior: 'smooth' }); const msg = document.querySelector('#auth-message'); if (msg) msg.textContent = 'Sign in as a student to check out.'; return; }
   if (!cartLines().length) { renderCart(); return; }
+  if (window.acePaymentRecoveryOrderId) {
+    try {
+      const recoveryResponse = await fetch(`/api/payments/status/${encodeURIComponent(window.acePaymentRecoveryOrderId)}`, { headers: { Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' } });
+      const recovery = await recoveryResponse.json().catch(() => ({}));
+      if (!recoveryResponse.ok || !recovery.retry_allowed) {
+        renderCart(recovery.message || 'A previous payment is still being verified. Do not pay again yet.');
+        return;
+      }
+      window.acePaymentRecoveryOrderId = null;
+    } catch (_) { renderCart('Could not verify the previous payment. Do not pay again yet; check your order status shortly.'); return; }
+  }
   if (!window.Razorpay) { renderCart('Payment checkout did not load. Check your connection and reload the page.'); return; }
   button.disabled = true; const original = button.textContent; button.textContent = 'Preparing secure checkout…';
   try {
@@ -101,17 +112,21 @@ async function placeCartOrder() {
     if (!quote || !window.confirm(`Continue to secure payment for ${money(quote.subtotal)}?`)) return;
     const response = await fetch('/api/payments/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify({ items: cartLines(), notes: document.querySelector('#checkout-notes')?.value.trim() || null, pickup_slot: document.querySelector('#pickup-slot')?.value || null }) });
     const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || data.error?.message || 'Could not start payment checkout.');
-    const payment = data.payment;
+    const payment = data.payment; window.acePaymentRecoveryOrderId = data.order?.id || null;
     await new Promise((resolve, reject) => {
-      const checkout = new window.Razorpay({ key: payment.key_id, amount: payment.amount, currency: payment.currency, name: payment.name, description: payment.description, order_id: payment.gateway_order_id, prefill: payment.prefill, theme: { color: '#176b4d' }, modal: { ondismiss: () => reject(new Error('Payment window closed. If you completed payment, refresh your order history before retrying.')) }, handler: async result => {
+      const checkout = new window.Razorpay({ key: payment.key_id, amount: payment.amount, currency: payment.currency, name: payment.name, description: payment.description, order_id: payment.gateway_order_id, prefill: payment.prefill, theme: { color: '#176b4d' }, modal: { ondismiss: () => reject(new Error('Payment window closed. Check payment status before trying again.')) }, handler: async result => {
         try {
           const verifyResponse = await fetch('/api/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${window.aceCanteenToken}`, Accept: 'application/json' }, body: JSON.stringify(result) });
           const verified = await verifyResponse.json().catch(() => ({}));
-          if (!verifyResponse.ok || verified.verified !== true) throw new Error(verified.detail || 'Payment could not be verified. Do not pay again until you check order history.');
-          resolve(verified.order);
+          if (!verifyResponse.ok || verified.verified !== true) {
+            renderCart(verified.message || 'Payment status is being verified. If your bank account was debited, do not pay again yet. Use Check Payment Status from your order history.');
+            reject(new Error(verified.message || verified.detail || 'Payment status is uncertain. Do not pay again yet.'));
+            return;
+          }
+          window.acePaymentRecoveryOrderId = null; resolve(verified.order);
         } catch (error) { reject(error); }
       } });
-      checkout.on('payment.failed', event => reject(new Error(event.error?.description || 'Payment failed. Please retry or use another payment method.')));
+      checkout.on('payment.failed', event => { renderCart('Payment attempt failed or is still being confirmed. Checking provider status before allowing another payment.'); reject(new Error(event.error?.description || 'Payment attempt failed. Check status before retrying.')); });
       checkout.open();
     }).then(async order => {
       cart = {}; saveCart(); document.querySelector('#checkout-notes').value = ''; renderCart(`Payment successful and verified. Order #${order.id}, pickup token #${order.token_number}.`);
