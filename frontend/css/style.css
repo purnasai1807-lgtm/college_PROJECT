@@ -230,3 +230,45 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
 #pickup-qr-order-details { display: grid; gap: .65rem; margin-top: .75rem; }
 #pickup-qr-order-details ul { margin: 0; padding-left: 1.25rem; }
 #pickup-qr-code-input { flex: 1 1 220px; min-width: 0; }
+
+/* SafeCore payment recovery: visible, accessible status and safe retry actions. */
+.safecore-recovery-panel {
+  margin: 14px 0 18px;
+  padding: 18px;
+  border: 1px solid #e6c58e;
+  border-radius: 14px;
+  background: #fff8eb;
+  color: #493719;
+}
+.safecore-recovery-panel[hidden] { display: none; }
+.safecore-recovery-panel h3 { margin: 0 0 7px; font-size: 16px; }
+.safecore-recovery-panel p { margin: 0 0 13px; font-size: 13px; line-height: 1.65; }
+.safecore-recovery-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.safecore-recovery-actions button { min-height: 42px; }
+.safecore-recovery-actions button:disabled { cursor: wait; opacity: .65; }
+@media (max-width: 520px) {
+  .safecore-recovery-panel { padding: 14px; }
+  .safecore-recovery-actions { flex-direction: column; }
+  .safecore-recovery-actions button { width: 100%; justify-content: center; }
+}
+
+
+/* SafeCore payment recovery panel */
+.safecore-recovery-panel {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #d9a441;
+  border-left: 4px solid #b7791f;
+  border-radius: 0.75rem;
+  background: #fffaf0;
+  color: #422006;
+}
+.safecore-recovery-panel[hidden] { display: none !important; }
+.safecore-recovery-panel h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.safecore-recovery-panel p { margin: 0.5rem 0 0.9rem; line-height: 1.55; }
+.safecore-recovery-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.safecore-recovery-actions button { min-height: 2.75rem; }
+.safecore-recovery-actions button:disabled { opacity: 0.65; cursor: wait; }
+@media (prefers-reduced-motion: reduce) {
+  .safecore-recovery-panel * { scroll-behavior: auto !important; }
+}

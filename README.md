@@ -70,7 +70,14 @@ The local release gate runs backend tests, Python compilation and JavaScript syn
 - Scan QR links using real Android and iPhone cameras on the deployed HTTPS domain.
 - Run load tests and a canteen staff acceptance test before taking real orders.
 
+## SafeCore payment recovery UI
 
-## SafeCore payment recovery
+The student checkout includes a SafeCore recovery panel for uncertain Razorpay results. If checkout is dismissed, the browser loses connectivity, or provider confirmation is delayed, the student sees a warning not to pay again while the payment is uncertain. `Check Payment Status` calls the authenticated `/api/payments/status/{order_id}` endpoint. The UI performs a bounded sequence of automatic checks and stops polling; students can check manually afterward. The retry button is shown only when the backend returns `retry_allowed: true` after querying Razorpay. Browser storage keeps only the order ID and owner user ID, not a payment-success claim; the backend verifies ownership on every request.
 
-See [`docs/SAFECORE-PAYMENTS.md`](docs/SAFECORE-PAYMENTS.md) for the payment state safety rules, recovery endpoint, Razorpay webhook configuration, deployment steps, and limitations. Payment reliability cannot be guaranteed against every bank/provider/network failure; the system instead keeps uncertain payments pending and prevents unsafe retries.
+Run payment-related tests from the repository root with a writable test database, for example:
+
+```bash
+DATABASE_URL=sqlite:////tmp/clg-safecore-test.db pytest -q -p no:cacheprovider backend/tests
+```
+
+A passing local test suite does not replace Razorpay test-mode checkout, webhook delivery, browser-disconnect acceptance tests, or production deployment verification.
