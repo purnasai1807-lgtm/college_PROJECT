@@ -243,3 +243,22 @@ footer { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 24px 0 30
   .hero { grid-template-columns: 1fr; gap: 28px; padding: 38px 0 48px; }
   .hero-account .auth-card { max-width: none; }
 }
+
+
+/* Requested layout: two-column intro/account row, then a full-width catalogue. */
+.hero { align-items: start; padding-top: 48px; padding-bottom: 52px; }
+.hero-copy { padding-top: 24px; }
+.hero-account-wrap { align-self: start; }
+.catalogue-section { width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); padding: 4rem max(24px, calc((100vw - 1160px) / 2)); }
+.catalogue-section .catalogue-toolbar { justify-content: center; }
+.catalogue-section .catalogue-message { max-width: 1160px; margin-left: auto; margin-right: auto; }
+.catalogue-section .catalogue-grid { max-width: 1160px; margin-left: auto; margin-right: auto; }
+.catalogue-section .section-heading { max-width: 720px; }
+@media (max-width: 760px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .hero-copy { padding-top: 0; }
+  .hero-account-wrap, .hero-account.auth-section { width: 100%; }
+  .catalogue-section { padding: 2.5rem 16px; }
+  .catalogue-section .catalogue-toolbar { justify-content: stretch; }
+  .catalogue-toolbar input { flex: 1 1 100%; min-width: 0; }
+}
